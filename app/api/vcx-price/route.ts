@@ -15,12 +15,10 @@ type PublicAuthResponse = {
 };
 
 type PublicAccountResponse = {
-  accountId?: string;
-  id?: string;
-  account?: {
+  accounts?: Array<{
     accountId?: string;
-    id?: string;
-  };
+    accountType?: string;
+  }>;
 };
 
 type PublicQuotesResponse = {
@@ -53,16 +51,11 @@ function requireEnv(name: string): string {
 }
 
 async function getPersonalAccessToken(): Promise<string> {
-  const apiSecret = requireEnv("PUBLIC_API_SECRET");
-  const apiKey = process.env.PUBLIC_API_KEY;
+  const apiSecret = requireEnv("PUBLIC_SECRET");
 
   const body: Record<string, string> = {
     secret: apiSecret,
   };
-
-  if (apiKey) {
-    body.apiKey = apiKey;
-  }
 
   const response = await fetch(AUTH_URL, {
     method: "POST",
@@ -79,6 +72,8 @@ async function getPersonalAccessToken(): Promise<string> {
   }
 
   const data = (await response.json()) as PublicAuthResponse;
+
+  
 
   const token =
     data.accessToken ||
@@ -109,14 +104,11 @@ async function getAccountId(accessToken: string): Promise<string> {
 
   const data = (await response.json()) as PublicAccountResponse;
 
-  const accountId =
-    data.accountId ||
-    data.id ||
-    data.account?.accountId ||
-    data.account?.id;
+  const account = data.accounts?.find((a) => a.accountType === "BROKERAGE");
+  const accountId = account?.accountId;
 
   if (!accountId) {
-    throw new Error("Could not find accountId in Public account response.");
+    throw new Error("Could not find a BROKERAGE accountId in Public account response.");
   }
 
   return accountId;
@@ -155,9 +147,9 @@ async function getVCXPrice(accessToken: string, accountId: string): Promise<numb
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      symbols: ["VCX"],
-    }),
+      body: JSON.stringify({
+  instruments: [{ symbol: "VCX", assetType: "EQUITY" }],
+  }),
     cache: "no-store",
   });
 

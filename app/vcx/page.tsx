@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   TrendingUp,
   Lock,
@@ -37,140 +37,146 @@ export default function VCXDashboardPage() {
   const [isLoadingPrice, setIsLoadingPrice] = useState<boolean>(false);
   const [priceError, setPriceError] = useState<string>("");
   const [lastUpdated, setLastUpdated] = useState<string>("");
-  const [customScenario, setCustomScenario] = useState("200");
-  const [alertHigh, setAlertHigh] = useState("150");
-  const [alertLow, setAlertLow] = useState("90");
+  const [customScenario, setCustomScenario] = useState<string>("200");
+  const [alertHigh, setAlertHigh] = useState<string>("150");
+  const [alertLow, setAlertLow] = useState<string>("90");
 
-  const currentPrice = useManualPrice ? Number(manualPrice) || 0 : livePrice;
-  const scenarioPrice = Number(customScenario) || 0;
-  const highAlertValue = Number(alertHigh) || 0;
-  const lowAlertValue = Number(alertLow) || 0;
+  const parsedManualPrice = Number(manualPrice);
+  const parsedScenarioPrice = Number(customScenario);
+  const parsedAlertHigh = Number(alertHigh);
+  const parsedAlertLow = Number(alertLow);
+
+  const currentPrice = useManualPrice
+    ? Number.isFinite(parsedManualPrice)
+      ? parsedManualPrice
+      : 0
+    : Number.isFinite(livePrice)
+    ? livePrice
+    : 0;
+
+  const scenarioPrice = Number.isFinite(parsedScenarioPrice)
+    ? parsedScenarioPrice
+    : 0;
+  const highAlertValue = Number.isFinite(parsedAlertHigh) ? parsedAlertHigh : 0;
+  const lowAlertValue = Number.isFinite(parsedAlertLow) ? parsedAlertLow : 0;
+
+  const fetchPrice = useCallback(async () => {
+    try {
+      setIsLoadingPrice(true);
+      setPriceError("");
+
+      const res = await fetch("/api/vcx-price", {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      const data: PriceApiResponse = await res.json();
+
+      if (!res.ok) {
+        setPriceError("Market may be closed. Showing last known price.");
+        return;
+      }
+
+      if (typeof data.price === "number" && Number.isFinite(data.price)) {
+        setLivePrice(data.price);
+        setLastUpdated(data.updatedAt || new Date().toISOString());
+      }
+    } catch {
+      setPriceError("Market may be closed. Showing last known price.");
+    } finally {
+      setIsLoadingPrice(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (useManualPrice) return;
 
-    let mounted = true;
-
-    async function fetchPrice() {
-      try {
-        setIsLoadingPrice(true);
-        setPriceError("");
-
-        const res = await fetch("/api/vcx-price", {
-          method: "GET",
-          cache: "no-store",
-        });
-
-        const data: PriceApiResponse = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.error || "Failed to fetch VCX price");
-        }
-
-        if (
-          mounted &&
-          typeof data.price === "number" &&
-          Number.isFinite(data.price)
-        ) {
-          setLivePrice(data.price);
-          setLastUpdated(data.updatedAt || new Date().toISOString());
-        }
-      } catch (err) {
-        if (mounted) {
-          setPriceError(
-            err instanceof Error ? err.message : "Unable to load VCX price"
-          );
-        }
-      } finally {
-        if (mounted) {
-          setIsLoadingPrice(false);
-        }
-      }
-    }
-
     fetchPrice();
     const interval = setInterval(fetchPrice, 30000);
 
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, [useManualPrice]);
+    return () => clearInterval(interval);
+  }, [useManualPrice, fetchPrice]);
 
-  const today = new Date();
-  const unlockDate = new Date(`${portfolio.unlockDate}T00:00:00`);
-  const msRemaining = unlockDate.getTime() - today.getTime();
-  const daysRemaining = Math.max(
-    0,
-    Math.ceil(msRemaining / (1000 * 60 * 60 * 24))
-  );
+  const daysRemaining = useMemo(() => {
+    const unlockDate = new Date(`${portfolio.unlockDate}T00:00:00`);
+    const now = new Date();
+    const msRemaining = unlockDate.getTime() - now.getTime();
 
-  const totalValue = useMemo(
-    () => portfolio.totalShares * currentPrice,
-    [currentPrice]
-  );
-  const unlockedValue = useMemo(
-    () => portfolio.unlockedShares * currentPrice,
-    [currentPrice]
-  );
-  const lockedValue = useMemo(
-    () => portfolio.lockedShares * currentPrice,
-    [currentPrice]
-  );
-  const profit = useMemo(
-    () => totalValue - portfolio.invested,
-    [totalValue]
-  );
+    return Math.max(0, Math.ceil(msRemaining / (1000 * 60 * 60 * 24)));
+  }, []);
+
+  const unlockProgress = useMemo(() => {
+    return Math.min(100, Math.max(0, ((180 - daysRemaining) / 180) * 100));
+  }, [daysRemaining]);
+
+  const totalValue = useMemo(() => {
+    return portfolio.totalShares * currentPrice;
+  }, [currentPrice]);
+
+  const unlockedValue = useMemo(() => {
+    return portfolio.unlockedShares * currentPrice;
+  }, [currentPrice]);
+
+  const lockedValue = useMemo(() => {
+    return portfolio.lockedShares * currentPrice;
+  }, [currentPrice]);
+
+  const profit = useMemo(() => {
+    return totalValue - portfolio.invested;
+  }, [totalValue]);
+
   const returnPct = useMemo(() => {
     if (portfolio.invested <= 0) return 0;
     return (profit / portfolio.invested) * 100;
   }, [profit]);
 
-  const scenarioRows = [80, 100, 106.75, 120, 150, 200, 300, 445].map(
-    (price) => ({
-      price,
-      total: portfolio.totalShares * price,
-      unlocked: portfolio.unlockedShares * price,
-      locked: portfolio.lockedShares * price,
-    })
+  const scenarioRows = useMemo(
+    () =>
+      [80, 100, 106.75, 120, 150, 200, 300, 445].map((price) => ({
+        price,
+        total: portfolio.totalShares * price,
+        unlocked: portfolio.unlockedShares * price,
+        locked: portfolio.lockedShares * price,
+      })),
+    []
   );
 
-  const customScenarioValue = portfolio.totalShares * scenarioPrice;
+  const customScenarioValue = useMemo(() => {
+    return portfolio.totalShares * scenarioPrice;
+  }, [scenarioPrice]);
 
-  const tieredPlan = [
-    {
-      trigger: "$150+",
-      action: "Sell 20% of total shares",
-      shares: portfolio.totalShares * 0.2,
-      proceeds: portfolio.totalShares * 0.2 * 150,
-      note: "Lock in a strong win while keeping most of the upside.",
-    },
-    {
-      trigger: "$200+",
-      action: "Sell another 25%",
-      shares: portfolio.totalShares * 0.25,
-      proceeds: portfolio.totalShares * 0.25 * 200,
-      note: "Take another big chunk of profit off the table.",
-    },
-    {
-      trigger: "$300+",
-      action: "Sell another 25%",
-      shares: portfolio.totalShares * 0.25,
-      proceeds: portfolio.totalShares * 0.25 * 300,
-      note: "Scale out heavily if hype returns.",
-    },
-    {
-      trigger: "Hold remainder",
-      action: "Keep final 30% long-term",
-      shares: portfolio.totalShares * 0.3,
-      proceeds: null,
-      note: "Leave room for long-term upside without being all-in.",
-    },
-  ];
-
-  const unlockProgress = Math.min(
-    100,
-    Math.max(0, ((180 - daysRemaining) / 180) * 100)
+  const tieredPlan = useMemo(
+    () => [
+      {
+        trigger: "$150+",
+        action: "Sell 20% of total shares",
+        shares: portfolio.totalShares * 0.2,
+        proceeds: portfolio.totalShares * 0.2 * 150,
+        note: "Lock in a strong win while keeping most of the upside.",
+      },
+      {
+        trigger: "$200+",
+        action: "Sell another 25%",
+        shares: portfolio.totalShares * 0.25,
+        proceeds: portfolio.totalShares * 0.25 * 200,
+        note: "Take another big chunk of profit off the table.",
+      },
+      {
+        trigger: "$300+",
+        action: "Sell another 25%",
+        shares: portfolio.totalShares * 0.25,
+        proceeds: portfolio.totalShares * 0.25 * 300,
+        note: "Scale out heavily if hype returns.",
+      },
+      {
+        trigger: "Hold remainder",
+        action: "Keep final 30% long-term",
+        shares: portfolio.totalShares * 0.3,
+        proceeds: null,
+        note: "Leave room for long-term upside without being all-in.",
+      },
+    ],
+    []
   );
 
   const alertState = useMemo(() => {
@@ -180,12 +186,14 @@ export default function VCXDashboardPage() {
         tone: "text-emerald-600",
       };
     }
+
     if (currentPrice <= lowAlertValue && lowAlertValue > 0) {
       return {
         label: `Below your downside watch level of ${money(lowAlertValue)}`,
         tone: "text-red-600",
       };
     }
+
     return {
       label: "Inside your normal watch range",
       tone: "text-slate-600",
@@ -233,7 +241,9 @@ export default function VCXDashboardPage() {
               <input
                 className="flex-1 rounded-2xl border bg-white px-3 py-2 text-sm outline-none"
                 value={manualPrice}
-                onChange={(e) => setManualPrice(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setManualPrice(e.target.value)
+                }
                 placeholder="Manual VCX price"
               />
               <button
@@ -242,7 +252,7 @@ export default function VCXDashboardPage() {
                     ? "bg-black text-white"
                     : "border bg-white text-slate-900"
                 }`}
-                onClick={() => setUseManualPrice((v) => !v)}
+                onClick={() => setUseManualPrice((v: boolean) => !v)}
               >
                 {useManualPrice ? "Use Live" : "Use Manual"}
               </button>
@@ -263,7 +273,8 @@ export default function VCXDashboardPage() {
               </button>
               <button
                 className="inline-flex items-center rounded-2xl border bg-white px-3 py-2 text-sm"
-                onClick={() => window.location.reload()}
+                onClick={fetchPrice}
+                disabled={isLoadingPrice || useManualPrice}
               >
                 <RefreshCcw className="mr-2 h-4 w-4" />
                 Refresh
@@ -276,7 +287,7 @@ export default function VCXDashboardPage() {
               </p>
             )}
             {priceError && !useManualPrice && (
-              <p className="mt-3 text-xs text-red-600">{priceError}</p>
+              <p className="mt-3 text-xs text-amber-600">{priceError}</p>
             )}
           </div>
         </div>
@@ -297,9 +308,7 @@ export default function VCXDashboardPage() {
           <MetricCard
             title="Profit / Loss"
             value={money(profit)}
-            subtitle={`${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(
-              1
-            )}% return`}
+            subtitle={`${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(1)}% return`}
             icon={<TrendingUp className="h-5 w-5" />}
           />
           <MetricCard
@@ -366,7 +375,9 @@ export default function VCXDashboardPage() {
                 <input
                   className="w-full rounded-2xl border bg-white px-3 py-2 text-sm outline-none"
                   value={alertHigh}
-                  onChange={(e) => setAlertHigh(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setAlertHigh(e.target.value)
+                  }
                 />
               </div>
 
@@ -377,7 +388,9 @@ export default function VCXDashboardPage() {
                 <input
                   className="w-full rounded-2xl border bg-white px-3 py-2 text-sm outline-none"
                   value={alertLow}
-                  onChange={(e) => setAlertLow(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setAlertLow(e.target.value)
+                  }
                 />
               </div>
             </div>
@@ -395,7 +408,9 @@ export default function VCXDashboardPage() {
                   <input
                     className="w-full rounded-2xl border bg-white px-3 py-2 text-sm outline-none"
                     value={customScenario}
-                    onChange={(e) => setCustomScenario(e.target.value)}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                      setCustomScenario(e.target.value)
+                    }
                     placeholder="Enter scenario price"
                   />
                 </div>
@@ -418,10 +433,7 @@ export default function VCXDashboardPage() {
                   >
                     <ScenarioCell label="Price" value={money(row.price)} />
                     <ScenarioCell label="Total" value={money(row.total)} />
-                    <ScenarioCell
-                      label="Unlocked"
-                      value={money(row.unlocked)}
-                    />
+                    <ScenarioCell label="Unlocked" value={money(row.unlocked)} />
                     <ScenarioCell label="Locked" value={money(row.locked)} />
                   </div>
                 ))}
@@ -462,17 +474,19 @@ export default function VCXDashboardPage() {
 }
 
 function money(n: number) {
+  const safe = Number.isFinite(n) ? n : 0;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 2,
-  }).format(n);
+  }).format(safe);
 }
 
 function number(n: number) {
+  const safe = Number.isFinite(n) ? n : 0;
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 3,
-  }).format(n);
+  }).format(safe);
 }
 
 function MetricCard({
