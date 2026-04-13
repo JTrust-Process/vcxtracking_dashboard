@@ -1,0 +1,75 @@
+# .github/workflows/vcx-alert.yml
+
+name: VCX Price Alert
+
+on:
+  schedule:
+    # Every 5 min Mon-Fri during market hours (9:30am-4pm ET = 13:30-20:00 UTC)
+    - cron: "*/5 13-19 * * 1-5"
+    # Market open summary — 9:30 AM ET (13:30 UTC)
+    - cron: "30 13 * * 1-5"
+    # Market close summary — 4:00 PM ET (20:00 UTC)
+    - cron: "0 20 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "alert | summary-open | summary-close"
+        required: false
+        default: "alert"
+
+jobs:
+  vcx-alert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Restore state cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/vcx_alert_state.json
+          key: vcx-alert-state-${{ github.run_id }}
+          restore-keys: |
+            vcx-alert-state-
+
+      - name: Determine run mode
+        id: mode
+        run: |
+          HOUR=$(date -u +%H)
+          MIN=$(date -u +%M)
+          MODE="alert"
+          if [ "$HOUR" = "13" ] && [ "$MIN" = "30" ]; then
+            MODE="summary-open"
+          elif [ "$HOUR" = "20" ] && [ "$MIN" = "00" ]; then
+            MODE="summary-close"
+          fi
+          if [ "${{ github.event.inputs.mode }}" != "" ]; then
+            MODE="${{ github.event.inputs.mode }}"
+          fi
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+          echo "Run mode: $MODE"
+
+      - name: Run alert checker
+        env:
+          PUBLIC_SECRET:       ${{ secrets.PUBLIC_SECRET }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          VCX_ALERT_HIGH:      ${{ secrets.VCX_ALERT_HIGH }}
+          VCX_ALERT_LOW:       ${{ secrets.VCX_ALERT_LOW }}
+        run: |
+          MODE="${{ steps.mode.outputs.mode }}"
+          if [ "$MODE" = "summary-open" ]; then
+            python scripts/vcx_alert.py --summary --open
+          elif [ "$MODE" = "summary-close" ]; then
+            python scripts/vcx_alert.py --summary --close
+          else
+            python scripts/vcx_alert.py
+          fi
