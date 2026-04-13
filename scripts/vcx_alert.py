@@ -205,7 +205,7 @@ def main():
     print(f"[VCX Alert] Fetching price... summary={is_summary} session={session_type}")
 
     try:
-        price = 113.0
+        price = fetch_price()
     except Exception as e:
         print(f"[VCX Alert] Failed to fetch price: {e}")
         sys.exit(1)
