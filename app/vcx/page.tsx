@@ -105,10 +105,6 @@ export default function VCXDashboardPage() {
     return Math.max(0, Math.ceil(msRemaining / (1000 * 60 * 60 * 24)));
   }, []);
 
-  const unlockProgress = useMemo(() => {
-    return Math.min(100, Math.max(0, ((180 - daysRemaining) / 180) * 100));
-  }, [daysRemaining]);
-
   const totalValue = useMemo(() => {
     return portfolio.totalShares * currentPrice;
   }, [currentPrice]);
