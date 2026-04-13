@@ -1,5 +1,0 @@
-{
-  "crons": [
-    { "path": "/api/vcx-alert", "schedule": "*/5 13-20 * * 1-5" }
-  ]
-}
