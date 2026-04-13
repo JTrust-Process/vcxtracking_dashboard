@@ -148,8 +148,8 @@ async function getVCXPrice(accessToken: string, accountId: string): Promise<numb
       "Content-Type": "application/json",
     },
       body: JSON.stringify({
-  instruments: [{ symbol: "VCX", assetType: "EQUITY" }],
-  }),
+  instruments: [{ symbol: "VCX", type: "EQUITY" }],
+}),
     cache: "no-store",
   });
 
