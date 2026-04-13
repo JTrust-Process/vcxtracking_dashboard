@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const AUTH_URL = "https://api.public.com/userapiauthservice/personal/access-tokens";
 const ACCOUNT_URL = "https://api.public.com/userapigateway/trading/account";
