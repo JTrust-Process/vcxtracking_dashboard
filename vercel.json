@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/vcx-price/route.ts": {
+      "runtime": "nodejs22.x"
+    }
+  }
+}
