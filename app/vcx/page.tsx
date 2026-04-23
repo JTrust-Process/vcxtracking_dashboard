@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine,
+  ResponsiveContainer, ReferenceLine, LineChart, Line,
 } from "recharts";
 
 type PriceApiResponse = {
@@ -27,6 +27,18 @@ const portfolio = {
 
 const PEAK_PRICE        = 445;
 const PROJECTION_PRICES = [80, 100, 120, 150, 200, 300, 445];
+
+// Risk zones
+const RISK_ZONES = [
+  { label: "DANGER",      min: 0,   max: 70,  color: "#ef4444", bg: "rgba(239,68,68,0.08)",    border: "rgba(239,68,68,0.25)"    },
+  { label: "CAUTION",     min: 70,  max: 120, color: "#f59e0b", bg: "rgba(245,158,11,0.08)",   border: "rgba(245,158,11,0.25)"   },
+  { label: "OPPORTUNITY", min: 120, max: 200, color: "#10b981", bg: "rgba(16,185,129,0.08)",   border: "rgba(16,185,129,0.25)"   },
+  { label: "TARGET",      min: 200, max: Infinity, color: "#a78bfa", bg: "rgba(124,58,237,0.08)", border: "rgba(124,58,237,0.25)" },
+];
+
+function getRiskZone(price: number) {
+  return RISK_ZONES.find((z) => price >= z.min && price < z.max) ?? RISK_ZONES[0];
+}
 
 const FED_LONG  = 0.15;
 const FED_SHORT = 0.22;
@@ -59,7 +71,6 @@ function useCountUp(target: number, duration = 600): number {
     const diff  = target - start;
     if (Math.abs(diff) < 0.01) return;
     const startTime = performance.now();
-
     const step = (now: number) => {
       const t    = Math.min((now - startTime) / duration, 1);
       const ease = 1 - Math.pow(1 - t, 3);
@@ -67,7 +78,6 @@ function useCountUp(target: number, duration = 600): number {
       if (t < 1) raf.current = requestAnimationFrame(step);
       else { setDisplay(target); prev.current = target; }
     };
-
     raf.current = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf.current);
   }, [target, duration]);
@@ -76,7 +86,7 @@ function useCountUp(target: number, duration = 600): number {
 }
 
 // ── Chart tooltip ─────────────────────────────────────────────────────────────
-function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: { label: string; pnl: number; price: number; projected: boolean } }> }) {
+function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: { label: string; pnl: number; price: number; projected: boolean; avg?: number } }> }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (
@@ -84,6 +94,7 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{
       <div style={{ color: "rgba(255,255,255,0.4)", marginBottom: "4px", fontSize: "10px" }}>{d.label}{d.projected ? " (PROJ)" : ""}</div>
       <div style={{ color: d.pnl >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>{money(d.pnl)} P&L</div>
       <div style={{ color: "#a78bfa" }}>${d.price.toFixed(2)} / share</div>
+      {d.avg && <div style={{ color: "#f59e0b", fontSize: "11px", marginTop: "2px" }}>20-avg: ${d.avg.toFixed(2)}</div>}
     </div>
   );
 }
@@ -148,6 +159,28 @@ export default function VCXDashboardPage() {
   const drawdown            = ((currentPrice - PEAK_PRICE) / PEAK_PRICE) * 100;
   const peakValue           = portfolio.totalShares * PEAK_PRICE;
 
+  // ── Minimum win lock ────────────────────────────────────────────────────────
+  const breakEvenShares   = currentPrice > 0 ? portfolio.invested / currentPrice : 0;
+  const breakEvenPct      = (breakEvenShares / portfolio.totalShares) * 100;
+  const freeRollShares    = portfolio.totalShares - breakEvenShares;
+  const freeRollValue     = freeRollShares * currentPrice;
+
+  // ── Risk zone ───────────────────────────────────────────────────────────────
+  const riskZone = getRiskZone(currentPrice);
+
+  // ── Rolling average ─────────────────────────────────────────────────────────
+  const rollingAvg = useMemo(() => {
+    if (priceHistory.length < 2) return null;
+    const window = priceHistory.slice(-20);
+    return window.reduce((sum, p) => sum + p.price, 0) / window.length;
+  }, [priceHistory]);
+
+  const priceRange = useMemo(() => {
+    if (priceHistory.length < 2) return null;
+    const prices = priceHistory.slice(-20).map((p) => p.price);
+    return { high: Math.max(...prices), low: Math.min(...prices), swing: ((Math.max(...prices) - Math.min(...prices)) / Math.min(...prices)) * 100 };
+  }, [priceHistory]);
+
   // Count-up animated values
   const animatedPrice      = useCountUp(currentPrice, 600);
   const animatedTotalValue = useCountUp(totalValue,   800);
@@ -155,11 +188,8 @@ export default function VCXDashboardPage() {
 
   useEffect(() => { setMounted(true); }, []);
 
-  // Check if browser notifications already granted
   useEffect(() => {
-    if ("Notification" in window && Notification.permission === "granted") {
-      setNotifEnabled(true);
-    }
+    if ("Notification" in window && Notification.permission === "granted") setNotifEnabled(true);
   }, []);
 
   const requestNotifPermission = useCallback(async () => {
@@ -210,7 +240,6 @@ export default function VCXDashboardPage() {
       pushNotif(`🚀 VCX hit your HIGH target of ${money(highAlertValue)}! Now at ${money(currentPrice)}`, "#10b981");
       fireBrowserNotif("🚀 VCX HIGH ALERT", `Price hit ${money(currentPrice)} — above your ${money(highAlertValue)} target`);
     } else if (currentPrice < highAlertValue) { alertFiredHigh.current = false; }
-
     if (lowAlertValue > 0 && currentPrice <= lowAlertValue && !alertFiredLow.current) {
       alertFiredLow.current = true;
       pushNotif(`⚠️ VCX dropped below floor ${money(lowAlertValue)}! Now at ${money(currentPrice)}`, "#ef4444");
@@ -231,10 +260,8 @@ export default function VCXDashboardPage() {
   }, [currentPrice, highAlertValue, lowAlertValue]);
 
   const scenarioRows = [80, 100, 106.75, 120, 150, 200, 300, 445].map((price) => ({
-    price,
-    total:    portfolio.totalShares    * price,
-    unlocked: portfolio.unlockedShares * price,
-    locked:   portfolio.lockedShares   * price,
+    price, total: portfolio.totalShares * price,
+    unlocked: portfolio.unlockedShares * price, locked: portfolio.lockedShares * price,
   }));
 
   const tieredPlan = [
@@ -252,9 +279,15 @@ export default function VCXDashboardPage() {
 
   const chartData = useMemo(() => {
     const hist = priceHistory.length > 0
-      ? priceHistory.map((p, i) => ({ label: `T-${priceHistory.length - i}`, price: p.price, pnl: p.pnl, projected: false }))
-      : [{ label: "Now", price: currentPrice, pnl: profit, projected: false }];
-    const proj = PROJECTION_PRICES.map((p) => ({ label: `$${p}`, price: p, pnl: portfolio.totalShares * p - portfolio.invested, projected: true }));
+      ? priceHistory.map((p, i) => {
+          const window = priceHistory.slice(Math.max(0, i - 19), i + 1);
+          const avg = window.reduce((s, x) => s + x.price, 0) / window.length;
+          return { label: `T-${priceHistory.length - i}`, price: p.price, pnl: p.pnl, projected: false, avg };
+        })
+      : [{ label: "Now", price: currentPrice, pnl: profit, projected: false, avg: currentPrice }];
+    const proj = PROJECTION_PRICES.map((p) => ({
+      label: `$${p}`, price: p, pnl: portfolio.totalShares * p - portfolio.invested, projected: true, avg: undefined,
+    }));
     return [...hist, ...proj];
   }, [priceHistory, currentPrice, profit]);
 
@@ -316,6 +349,7 @@ export default function VCXDashboardPage() {
         .pnl-chip{font-size:13px;font-family:'Space Mono',monospace;padding:6px 14px;border-radius:100px;font-weight:700}
         .pnl-pos{background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);color:#34d399}
         .pnl-neg{background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);color:#f87171}
+        .risk-badge{font-size:11px;font-family:'Space Mono',monospace;padding:4px 10px;border-radius:100px;font-weight:700;letter-spacing:.08em}
         .price-controls{padding:1.5rem;display:flex;flex-direction:column;gap:1rem}
         .ctrl-label{font-size:10px;font-family:'Space Mono',monospace;letter-spacing:.15em;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:6px}
         .ctrl-input{width:100%;background:rgba(255,255,255,0.05)!important;border:1px solid rgba(255,255,255,0.1)!important;border-radius:10px!important;color:#e2e8f0!important;font-family:'Space Mono',monospace!important;font-size:14px!important;padding:10px 14px!important;outline:none!important;transition:border-color .2s}
@@ -379,17 +413,17 @@ export default function VCXDashboardPage() {
         .error-text{font-size:11px;font-family:'Space Mono',monospace;color:#f59e0b;margin-top:.5rem;padding:6px 10px;background:rgba(245,158,11,0.08);border-radius:6px;border:1px solid rgba(245,158,11,0.2)}
         .tax-tier-card{padding:1rem;border-radius:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);margin-bottom:.75rem}
         .sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:1rem}
+        .win-lock-card{padding:1.25rem;border-radius:14px;margin-bottom:1.25rem}
+        .zone-bar{display:flex;height:8px;border-radius:100px;overflow:hidden;margin:.5rem 0;gap:2px}
+        .zone-seg{height:100%;border-radius:100px;flex:1;transition:opacity .3s}
         .recharts-cartesian-axis-tick text{fill:rgba(255,255,255,0.25)!important;font-family:'Space Mono',monospace!important;font-size:10px!important}
         .recharts-tooltip-wrapper{outline:none!important}
         @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(3,1fr)}}
       `}</style>
 
-      {/* Notifications */}
       <div className="notif-stack">
         {notifications.map((n) => (
-          <div key={n.id} className="notif" style={{ borderColor: `${n.color}44`, background: "rgba(3,7,18,0.9)", color: n.color }}>
-            {n.msg}
-          </div>
+          <div key={n.id} className="notif" style={{ borderColor: `${n.color}44`, background: "rgba(3,7,18,0.9)", color: n.color }}>{n.msg}</div>
         ))}
       </div>
 
@@ -404,12 +438,15 @@ export default function VCXDashboardPage() {
               <span className="logo-text">VCX Position</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              {/* Risk zone badge */}
+              <div className="risk-badge" style={{ background: riskZone.bg, border: `1px solid ${riskZone.border}`, color: riskZone.color }}>
+                {riskZone.label}
+              </div>
               {!useManualPrice && <div className="live-badge"><div className="live-dot" />LIVE · 30s</div>}
               <button
                 className={`ctrl-btn ${notifEnabled ? "btn-enabled" : "btn-ghost"}`}
                 style={{ width: "auto", padding: "4px 12px", fontSize: "11px", fontFamily: "'Space Mono',monospace" }}
                 onClick={requestNotifPermission}
-                title={notifEnabled ? "Browser notifications enabled" : "Enable browser notifications"}
               >
                 {notifEnabled ? "🔔 Alerts On" : "🔔 Enable Alerts"}
               </button>
@@ -481,14 +518,14 @@ export default function VCXDashboardPage() {
             </div>
           </div>
 
-          {/* Metrics — 5 cards */}
+          {/* Metrics */}
           <div className="metrics-grid">
             {[
-              { label: "Total Value",    value: `$${animatedTotalValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`, sub: null,                          accent: "linear-gradient(90deg,#7c3aed,#a78bfa)", color: "#e2e8f0",  delay: 160 },
-              { label: "Invested",       value: money(portfolio.invested),                                                        sub: null,                          accent: "linear-gradient(90deg,#0ea5e9,#38bdf8)", color: "#e2e8f0",  delay: 220 },
-              { label: "Profit / Loss",  value: `${animatedProfit >= 0 ? "+" : ""}$${Math.abs(animatedProfit).toLocaleString("en-US", { maximumFractionDigits: 0 })}`, sub: null, accent: profit >= 0 ? "linear-gradient(90deg,#10b981,#34d399)" : "linear-gradient(90deg,#ef4444,#f87171)", color: profit >= 0 ? "#34d399" : "#f87171", delay: 280 },
-              { label: "From Peak",      value: `${drawdown.toFixed(1)}%`,                                                        sub: `Peak ${money(peakValue)}`,    accent: "linear-gradient(90deg,#ef4444,#f87171)", color: "#f87171", delay: 340 },
-              { label: "Unlock",         value: `${daysRemaining}d`,                                                              sub: portfolio.unlockDate,          accent: "linear-gradient(90deg,#f59e0b,#fbbf24)", color: "#fbbf24", delay: 400 },
+              { label: "Total Value",   value: `$${animatedTotalValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`, sub: null,                       accent: "linear-gradient(90deg,#7c3aed,#a78bfa)", color: "#e2e8f0",  delay: 160 },
+              { label: "Invested",      value: money(portfolio.invested),                                                        sub: null,                       accent: "linear-gradient(90deg,#0ea5e9,#38bdf8)", color: "#e2e8f0",  delay: 220 },
+              { label: "Profit / Loss", value: `${animatedProfit >= 0 ? "+" : ""}$${Math.abs(animatedProfit).toLocaleString("en-US", { maximumFractionDigits: 0 })}`, sub: null, accent: profit >= 0 ? "linear-gradient(90deg,#10b981,#34d399)" : "linear-gradient(90deg,#ef4444,#f87171)", color: profit >= 0 ? "#34d399" : "#f87171", delay: 280 },
+              { label: "From Peak",     value: `${drawdown.toFixed(1)}%`,                                                        sub: `Peak ${money(peakValue)}`, accent: "linear-gradient(90deg,#ef4444,#f87171)", color: "#f87171", delay: 340 },
+              { label: "Unlock",        value: `${daysRemaining}d`,                                                              sub: portfolio.unlockDate,       accent: "linear-gradient(90deg,#f59e0b,#fbbf24)", color: "#fbbf24", delay: 400 },
             ].map((m) => (
               <div key={m.label} className="glass metric-card" style={fade(m.delay)}>
                 <div className="metric-accent" style={{ background: m.accent }} />
@@ -510,12 +547,14 @@ export default function VCXDashboardPage() {
                 ))}
               </div>
 
+              {/* Chart tab */}
               {activeTab === "chart" && (
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
                     <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.25)", fontFamily: "'Space Mono',monospace" }}>SESSION HISTORY + PROJECTION</div>
                     <div style={{ display: "flex", gap: "12px", fontSize: "11px", fontFamily: "'Space Mono',monospace" }}>
                       <span style={{ color: "#10b981" }}>── Live</span>
+                      <span style={{ color: "#f59e0b" }}>── 20-avg</span>
                       <span style={{ color: "rgba(167,139,250,0.6)" }}>- - Projected</span>
                     </div>
                   </div>
@@ -539,18 +578,29 @@ export default function VCXDashboardPage() {
                         <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
                         <Area type="monotone" dataKey="pnl" stroke="#10b981" strokeWidth={2} fill="url(#histGrad)" dot={false} activeDot={{ r: 5, fill: "#10b981", strokeWidth: 0 }} data={chartData.filter((d) => !d.projected)} isAnimationActive animationDuration={800} />
                         <Area type="monotone" dataKey="pnl" stroke="rgba(167,139,250,0.6)" strokeWidth={1.5} strokeDasharray="5 4" fill="url(#projGrad)" dot={false} activeDot={{ r: 4, fill: "#a78bfa", strokeWidth: 0 }} data={chartData.filter((d) => d.projected)} isAnimationActive animationDuration={1000} />
+                        {/* Rolling average line */}
+                        <Line type="monotone" dataKey="avg" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="3 3" data={chartData.filter((d) => !d.projected && d.avg !== undefined)} isAnimationActive={false} />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
-                  <div style={{ marginTop: "1rem", display: "flex", gap: "1.5rem", fontSize: "12px", fontFamily: "'Space Mono',monospace" }}>
+
+                  {/* Stats row */}
+                  <div style={{ marginTop: "1rem", display: "flex", gap: "1.5rem", fontSize: "12px", fontFamily: "'Space Mono',monospace", flexWrap: "wrap" }}>
                     <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>CURRENT PNL</div><div style={{ color: profit >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>{money(profit)}</div></div>
-                    <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>AT $445</div><div style={{ color: "#a78bfa", fontWeight: 700 }}>{money(portfolio.totalShares * 445 - portfolio.invested)}</div></div>
+                    <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>20-PT AVG</div><div style={{ color: "#f59e0b", fontWeight: 700 }}>{rollingAvg ? `$${rollingAvg.toFixed(2)}` : "—"}</div></div>
+                    {priceRange && (
+                      <>
+                        <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>20-PT HIGH</div><div style={{ color: "#10b981" }}>${priceRange.high.toFixed(2)}</div></div>
+                        <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>20-PT LOW</div><div style={{ color: "#f87171" }}>${priceRange.low.toFixed(2)}</div></div>
+                        <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>SWING</div><div style={{ color: "rgba(255,255,255,0.6)" }}>{priceRange.swing.toFixed(1)}%</div></div>
+                      </>
+                    )}
                     <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>FROM PEAK</div><div style={{ color: "#f87171", fontWeight: 700 }}>{drawdown.toFixed(1)}%</div></div>
-                    <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>DATAPOINTS</div><div style={{ color: "#e2e8f0" }}>{priceHistory.length} pts</div></div>
                   </div>
                 </div>
               )}
 
+              {/* Tax tab */}
               {activeTab === "tax" && (
                 <div>
                   <div className="ctrl-label">Holding Period</div>
@@ -588,6 +638,7 @@ export default function VCXDashboardPage() {
                 </div>
               )}
 
+              {/* Scenario tab */}
               {activeTab === "scenario" && (
                 <div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.25rem" }}>
@@ -601,21 +652,25 @@ export default function VCXDashboardPage() {
                     </div>
                   </div>
                   <div className="scenario-header"><span>PRICE</span><span>TOTAL</span><span>UNLOCKED</span><span>LOCKED</span></div>
-                  {scenarioRows.map((row) => (
-                    <div key={row.price} className={`scenario-row${Math.abs(row.price - currentPrice) < 2 ? " cur" : ""}`} onMouseEnter={() => setHoveredScenario(row.price)} onMouseLeave={() => setHoveredScenario(null)}>
-                      <span style={{ color: "#a78bfa", fontWeight: 700 }}>{money(row.price)}</span>
-                      <span style={{ color: "#e2e8f0" }}>{money(row.total)}</span>
-                      <span style={{ color: "#34d399" }}>{money(row.unlocked)}</span>
-                      <span style={{ color: "rgba(255,255,255,0.4)" }}>{money(row.locked)}</span>
-                      {hoveredScenario === row.price && <ScenarioTooltip price={row.price} isLongTerm={isLongTerm} />}
-                    </div>
-                  ))}
+                  {scenarioRows.map((row) => {
+                    const zone = getRiskZone(row.price);
+                    return (
+                      <div key={row.price} className={`scenario-row${Math.abs(row.price - currentPrice) < 2 ? " cur" : ""}`} onMouseEnter={() => setHoveredScenario(row.price)} onMouseLeave={() => setHoveredScenario(null)}>
+                        <span style={{ color: zone.color, fontWeight: 700 }}>{money(row.price)}</span>
+                        <span style={{ color: "#e2e8f0" }}>{money(row.total)}</span>
+                        <span style={{ color: "#34d399" }}>{money(row.unlocked)}</span>
+                        <span style={{ color: "rgba(255,255,255,0.4)" }}>{money(row.locked)}</span>
+                        {hoveredScenario === row.price && <ScenarioTooltip price={row.price} isLongTerm={isLongTerm} />}
+                      </div>
+                    );
+                  })}
                   <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: ".75rem" }}>
-                    ← Hover any row for tax estimate ({isLongTerm ? "long-term" : "short-term"})
+                    ← Hover any row for tax estimate · price colors = risk zone
                   </div>
                 </div>
               )}
 
+              {/* Exit tab */}
               {activeTab === "exit" && (
                 <div>
                   {tieredPlan.map((step, i) => (
@@ -652,34 +707,49 @@ export default function VCXDashboardPage() {
 
             {/* Right column */}
             <div className="right-col">
-              <div className="glass panel" style={fade(520)}>
-                <div className="section-title">Position Split</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.25rem" }}>
-                  {[
-                    { label: "Unlocked", sub: "Tradable now",  shares: portfolio.unlockedShares, value: unlockedValue, color: "#10b981" },
-                    { label: "Locked",   sub: "Until 9/14/26", shares: portfolio.lockedShares,   value: lockedValue,   color: "#7c3aed" },
-                  ].map((s) => (
-                    <div key={s.label} style={{ padding: "1rem", borderRadius: "12px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                      <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: s.color, marginBottom: ".5rem", boxShadow: `0 0 8px ${s.color}` }} />
-                      <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>{s.label}</div>
-                      <div style={{ fontSize: "9px",  color: "rgba(255,255,255,0.2)", marginBottom: "6px", fontFamily: "'Space Mono',monospace" }}>{s.sub}</div>
-                      <div style={{ fontSize: "1.1rem", fontFamily: "'Space Mono',monospace", fontWeight: 700, color: "#e2e8f0" }}>{num(s.shares)}</div>
-                      <div style={{ fontSize: "12px", color: s.color, fontFamily: "'Space Mono',monospace" }}>{money(s.value)}</div>
-                    </div>
-                  ))}
+              {/* Minimum Win Lock */}
+              <div className="glass panel" style={fade(460)}>
+                <div className="section-title">Minimum Win Lock</div>
+                <div className="win-lock-card" style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: "14px", padding: "1.25rem" }}>
+                  <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace", marginBottom: "4px" }}>SHARES TO SELL TO BREAK EVEN</div>
+                  <div style={{ fontSize: "1.6rem", fontFamily: "'Space Mono',monospace", fontWeight: 700, color: "#10b981" }}>{breakEvenShares.toFixed(3)}</div>
+                  <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace", marginTop: "2px" }}>{breakEvenPct.toFixed(1)}% of position at {money(currentPrice)}</div>
                 </div>
-                <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.25)", marginBottom: "6px", fontFamily: "'Space Mono',monospace" }}>
-                  LOCK RELEASE — {unlockProgress.toFixed(0)}%
+                <div className="split-row">
+                  <span className="split-label">Invested to recover</span>
+                  <span className="split-value" style={{ color: "#10b981" }}>{money(portfolio.invested)}</span>
                 </div>
-                <div className="unlock-bar-track">
-                  <div className="unlock-bar-fill" style={{ width: `${unlockProgress}%` }} />
+                <div className="split-row">
+                  <span className="split-label">Free-roll shares left</span>
+                  <span className="split-value">{freeRollShares.toFixed(3)}</span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: "4px" }}>
-                  <span>START</span><span>{daysRemaining}d LEFT</span><span>9/14/26</span>
+                <div className="split-row">
+                  <span className="split-label">Free-roll value</span>
+                  <span className="split-value" style={{ color: "#a78bfa" }}>{money(freeRollValue)}</span>
+                </div>
+                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: ".75rem", lineHeight: 1.5 }}>
+                  Sell {breakEvenShares.toFixed(1)} shares → recover your full investment. Everything else is pure upside.
                 </div>
               </div>
 
-              <div className="glass panel" style={fade(580)}>
+              {/* Risk zones */}
+              <div className="glass panel" style={fade(520)}>
+                <div className="section-title">Risk Zones</div>
+                <div style={{ marginBottom: "1rem" }}>
+                  {RISK_ZONES.map((z) => (
+                    <div key={z.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: ".5rem .75rem", borderRadius: "8px", marginBottom: "4px", background: currentPrice >= z.min && currentPrice < z.max ? z.bg : "transparent", border: `1px solid ${currentPrice >= z.min && currentPrice < z.max ? z.border : "transparent"}`, transition: "all .3s" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: z.color, boxShadow: currentPrice >= z.min && currentPrice < z.max ? `0 0 8px ${z.color}` : "none" }} />
+                        <span style={{ fontSize: "11px", fontFamily: "'Space Mono',monospace", color: currentPrice >= z.min && currentPrice < z.max ? z.color : "rgba(255,255,255,0.3)", fontWeight: currentPrice >= z.min && currentPrice < z.max ? 700 : 400 }}>{z.label}</span>
+                      </div>
+                      <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.25)", fontFamily: "'Space Mono',monospace" }}>
+                        {z.max === Infinity ? `$${z.min}+` : `$${z.min}–$${z.max}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Alert watch */}
                 <div className="section-title">Alert Watch</div>
                 <div className="alert-status" style={{ borderColor: `${alertState.color}33`, background: `${alertState.color}11`, color: alertState.color }}>
                   <div className="alert-dot" style={{ background: alertState.color, boxShadow: `0 0 6px ${alertState.color}` }} />
@@ -709,6 +779,34 @@ export default function VCXDashboardPage() {
                 <div className="split-row">
                   <span className="split-label">Peak ($445)</span>
                   <span className="split-value" style={{ color: "#f87171" }}>{drawdown.toFixed(1)}% down</span>
+                </div>
+              </div>
+
+              {/* Position split */}
+              <div className="glass panel" style={fade(580)}>
+                <div className="section-title">Position Split</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.25rem" }}>
+                  {[
+                    { label: "Unlocked", sub: "Tradable now",  shares: portfolio.unlockedShares, value: unlockedValue, color: "#10b981" },
+                    { label: "Locked",   sub: "Until 9/14/26", shares: portfolio.lockedShares,   value: lockedValue,   color: "#7c3aed" },
+                  ].map((s) => (
+                    <div key={s.label} style={{ padding: "1rem", borderRadius: "12px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: s.color, marginBottom: ".5rem", boxShadow: `0 0 8px ${s.color}` }} />
+                      <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>{s.label}</div>
+                      <div style={{ fontSize: "9px", color: "rgba(255,255,255,0.2)", marginBottom: "6px", fontFamily: "'Space Mono',monospace" }}>{s.sub}</div>
+                      <div style={{ fontSize: "1.1rem", fontFamily: "'Space Mono',monospace", fontWeight: 700, color: "#e2e8f0" }}>{num(s.shares)}</div>
+                      <div style={{ fontSize: "12px", color: s.color, fontFamily: "'Space Mono',monospace" }}>{money(s.value)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.25)", marginBottom: "6px", fontFamily: "'Space Mono',monospace" }}>
+                  LOCK RELEASE — {unlockProgress.toFixed(0)}%
+                </div>
+                <div className="unlock-bar-track">
+                  <div className="unlock-bar-fill" style={{ width: `${unlockProgress}%` }} />
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: "4px" }}>
+                  <span>START</span><span>{daysRemaining}d LEFT</span><span>9/14/26</span>
                 </div>
               </div>
             </div>
