@@ -17,15 +17,16 @@ type PriceApiResponse = {
 type PricePoint = { price: number; pnl: number };
 type Notification = { id: number; msg: string; color: string };
 
-const projectionPrices = [80, 100, 120, 150, 200, 300, 445];
-
 const portfolio = {
-  totalShares: 154.548438,
+  totalShares:    154.548438,
   unlockedShares: 5.268704,
-  lockedShares: 149.279734,
-  invested: 2160.3,
-  unlockDate: "2026-09-14",
+  lockedShares:   149.279734,
+  invested:       2160.3,
+  unlockDate:     "2026-09-14",
 };
+
+const PEAK_PRICE        = 445;
+const PROJECTION_PRICES = [80, 100, 120, 150, 200, 300, 445];
 
 const FED_LONG  = 0.15;
 const FED_SHORT = 0.22;
@@ -54,14 +55,14 @@ function useCountUp(target: number, duration = 600): number {
   const raf  = useRef<number>(0);
 
   useEffect(() => {
-    const start     = prev.current;
-    const diff      = target - start;
+    const start = prev.current;
+    const diff  = target - start;
     if (Math.abs(diff) < 0.01) return;
     const startTime = performance.now();
 
     const step = (now: number) => {
       const t    = Math.min((now - startTime) / duration, 1);
-      const ease = 1 - Math.pow(1 - t, 3); // cubic ease-out
+      const ease = 1 - Math.pow(1 - t, 3);
       setDisplay(start + diff * ease);
       if (t < 1) raf.current = requestAnimationFrame(step);
       else { setDisplay(target); prev.current = target; }
@@ -74,7 +75,7 @@ function useCountUp(target: number, duration = 600): number {
   return display;
 }
 
-// ── Custom chart tooltip ──────────────────────────────────────────────────────
+// ── Chart tooltip ─────────────────────────────────────────────────────────────
 function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: { label: string; pnl: number; price: number; projected: boolean } }> }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
@@ -104,25 +105,26 @@ function ScenarioTooltip({ price, isLongTerm }: { price: number; isLongTerm: boo
 }
 
 export default function VCXDashboardPage() {
-  const [livePrice,      setLivePrice]      = useState<number>(106.75);
-  const [manualPrice,    setManualPrice]    = useState<string>("106.75");
-  const [useManualPrice, setUseManualPrice] = useState<boolean>(false);
-  const [isLoadingPrice, setIsLoadingPrice] = useState<boolean>(false);
-  const [priceError,     setPriceError]     = useState<string>("");
-  const [lastUpdated,    setLastUpdated]    = useState<string>("");
-  const [customScenario, setCustomScenario] = useState<string>("200");
-  const [alertHigh,      setAlertHigh]      = useState<string>("150");
-  const [alertLow,       setAlertLow]       = useState<string>("90");
-  const [pricePulse,     setPricePulse]     = useState<boolean>(false);
-  const [priceHistory,   setPriceHistory]   = useState<PricePoint[]>([]);
-  const [notifications,  setNotifications]  = useState<Notification[]>([]);
-  const [isLongTerm,     setIsLongTerm]     = useState<boolean>(true);
-  const [sellShares,     setSellShares]     = useState<string>("30");
-  const [sellPrice,      setSellPrice]      = useState<string>("150");
-  const [activeTab,      setActiveTab]      = useState<"chart" | "tax" | "scenario" | "exit">("chart");
-  const [hoveredScenario,setHoveredScenario]= useState<number | null>(null);
-  const [activeQuick,    setActiveQuick]    = useState<number | null>(null);
-  const [mounted,        setMounted]        = useState(false);
+  const [livePrice,       setLivePrice]       = useState<number>(106.75);
+  const [manualPrice,     setManualPrice]     = useState<string>("106.75");
+  const [useManualPrice,  setUseManualPrice]  = useState<boolean>(false);
+  const [isLoadingPrice,  setIsLoadingPrice]  = useState<boolean>(false);
+  const [priceError,      setPriceError]      = useState<string>("");
+  const [lastUpdated,     setLastUpdated]     = useState<string>("");
+  const [customScenario,  setCustomScenario]  = useState<string>("200");
+  const [alertHigh,       setAlertHigh]       = useState<string>("150");
+  const [alertLow,        setAlertLow]        = useState<string>("90");
+  const [pricePulse,      setPricePulse]      = useState<boolean>(false);
+  const [priceHistory,    setPriceHistory]    = useState<PricePoint[]>([]);
+  const [notifications,   setNotifications]   = useState<Notification[]>([]);
+  const [isLongTerm,      setIsLongTerm]      = useState<boolean>(true);
+  const [sellShares,      setSellShares]      = useState<string>("30");
+  const [sellPrice,       setSellPrice]       = useState<string>("150");
+  const [activeTab,       setActiveTab]       = useState<"chart" | "tax" | "scenario" | "exit">("chart");
+  const [hoveredScenario, setHoveredScenario] = useState<number | null>(null);
+  const [activeQuick,     setActiveQuick]     = useState<number | null>(null);
+  const [mounted,         setMounted]         = useState(false);
+  const [notifEnabled,    setNotifEnabled]    = useState(false);
 
   const alertFiredHigh = useRef(false);
   const alertFiredLow  = useRef(false);
@@ -137,20 +139,39 @@ export default function VCXDashboardPage() {
   const highAlertValue = Number.isFinite(parsedAlertHigh)     ? parsedAlertHigh     : 0;
   const lowAlertValue  = Number.isFinite(parsedAlertLow)      ? parsedAlertLow      : 0;
 
-  const totalValue         = portfolio.totalShares    * currentPrice;
-  const profit             = totalValue - portfolio.invested;
-  const returnPct          = portfolio.invested > 0 ? (profit / portfolio.invested) * 100 : 0;
-  const unlockedValue      = portfolio.unlockedShares * currentPrice;
-  const lockedValue        = portfolio.lockedShares   * currentPrice;
-  const customScenarioValue= portfolio.totalShares    * scenarioPrice;
+  const totalValue          = portfolio.totalShares    * currentPrice;
+  const profit              = totalValue - portfolio.invested;
+  const returnPct           = portfolio.invested > 0 ? (profit / portfolio.invested) * 100 : 0;
+  const unlockedValue       = portfolio.unlockedShares * currentPrice;
+  const lockedValue         = portfolio.lockedShares   * currentPrice;
+  const customScenarioValue = portfolio.totalShares    * scenarioPrice;
+  const drawdown            = ((currentPrice - PEAK_PRICE) / PEAK_PRICE) * 100;
+  const peakValue           = portfolio.totalShares * PEAK_PRICE;
 
   // Count-up animated values
-  const animatedPrice       = useCountUp(currentPrice, 600);
-  const animatedTotalValue  = useCountUp(totalValue,   800);
-  const animatedProfit      = useCountUp(profit,       800);
+  const animatedPrice      = useCountUp(currentPrice, 600);
+  const animatedTotalValue = useCountUp(totalValue,   800);
+  const animatedProfit     = useCountUp(profit,       800);
 
-  // Staggered mount
   useEffect(() => { setMounted(true); }, []);
+
+  // Check if browser notifications already granted
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "granted") {
+      setNotifEnabled(true);
+    }
+  }, []);
+
+  const requestNotifPermission = useCallback(async () => {
+    if (!("Notification" in window)) return;
+    const permission = await Notification.requestPermission();
+    setNotifEnabled(permission === "granted");
+  }, []);
+
+  const fireBrowserNotif = useCallback((title: string, body: string) => {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    new Notification(title, { body, icon: "/favicon.ico" });
+  }, []);
 
   const pushNotif = useCallback((msg: string, color: string) => {
     const id = Date.now();
@@ -187,12 +208,15 @@ export default function VCXDashboardPage() {
     if (highAlertValue > 0 && currentPrice >= highAlertValue && !alertFiredHigh.current) {
       alertFiredHigh.current = true;
       pushNotif(`🚀 VCX hit your HIGH target of ${money(highAlertValue)}! Now at ${money(currentPrice)}`, "#10b981");
+      fireBrowserNotif("🚀 VCX HIGH ALERT", `Price hit ${money(currentPrice)} — above your ${money(highAlertValue)} target`);
     } else if (currentPrice < highAlertValue) { alertFiredHigh.current = false; }
+
     if (lowAlertValue > 0 && currentPrice <= lowAlertValue && !alertFiredLow.current) {
       alertFiredLow.current = true;
       pushNotif(`⚠️ VCX dropped below floor ${money(lowAlertValue)}! Now at ${money(currentPrice)}`, "#ef4444");
+      fireBrowserNotif("⚠️ VCX LOW ALERT", `Price dropped to ${money(currentPrice)} — below your ${money(lowAlertValue)} floor`);
     } else if (currentPrice > lowAlertValue) { alertFiredLow.current = false; }
-  }, [currentPrice, highAlertValue, lowAlertValue, pushNotif]);
+  }, [currentPrice, highAlertValue, lowAlertValue, pushNotif, fireBrowserNotif]);
 
   const daysRemaining  = useMemo(() => {
     const d = new Date(`${portfolio.unlockDate}T00:00:00`);
@@ -220,31 +244,22 @@ export default function VCXDashboardPage() {
     { trigger: "Hold",  pct: "30%", shares: portfolio.totalShares * 0.3,  proceeds: null,                               note: "Keep final 30% long-term." },
   ];
 
-  const sellSharesNum  = Math.min(Number(sellShares) || 0, portfolio.totalShares);
-  const sellPriceNum   = Number(sellPrice) || 0;
-  const sellProceeds   = sellSharesNum * sellPriceNum;
-  const sellTax        = calcTax(sellProceeds, isLongTerm);
+  const sellSharesNum = Math.min(Number(sellShares) || 0, portfolio.totalShares);
+  const sellPriceNum  = Number(sellPrice) || 0;
+  const sellProceeds  = sellSharesNum * sellPriceNum;
+  const sellTax       = calcTax(sellProceeds, isLongTerm);
+  const taxTiers      = tieredPlan.filter((t) => t.proceeds).map((t) => ({ ...t, tax: calcTax(t.proceeds!, isLongTerm) }));
 
-  const taxTiers = tieredPlan.filter((t) => t.proceeds).map((t) => ({ ...t, tax: calcTax(t.proceeds!, isLongTerm) }));
-
-  // Recharts data — session history + projection
-  
   const chartData = useMemo(() => {
     const hist = priceHistory.length > 0
       ? priceHistory.map((p, i) => ({ label: `T-${priceHistory.length - i}`, price: p.price, pnl: p.pnl, projected: false }))
       : [{ label: "Now", price: currentPrice, pnl: profit, projected: false }];
-
-    const proj = projectionPrices.map((p) => ({
-      label: `$${p}`, price: p, pnl: portfolio.totalShares * p - portfolio.invested, projected: true,
-    }));
-
+    const proj = PROJECTION_PRICES.map((p) => ({ label: `$${p}`, price: p, pnl: portfolio.totalShares * p - portfolio.invested, projected: true }));
     return [...hist, ...proj];
   }, [priceHistory, currentPrice, profit]);
 
-  // Sparkline data for hero (last 20 history points)
   const sparkData = useMemo(() =>
-    (priceHistory.length > 1 ? priceHistory.slice(-20) : [{ price: currentPrice, pnl: profit }])
-      .map((p) => ({ v: p.price })),
+    (priceHistory.length > 1 ? priceHistory.slice(-20) : [{ price: currentPrice, pnl: profit }]).map((p) => ({ v: p.price })),
   [priceHistory, currentPrice, profit]);
 
   const tabs: { id: typeof activeTab; label: string }[] = [
@@ -260,8 +275,8 @@ export default function VCXDashboardPage() {
   }
 
   const fade = (delay: number) => ({
-    opacity:   mounted ? 1 : 0,
-    transform: mounted ? "translateY(0)" : "translateY(16px)",
+    opacity:    mounted ? 1 : 0,
+    transform:  mounted ? "translateY(0)" : "translateY(16px)",
     transition: `opacity 0.5s ease ${delay}ms, transform 0.5s ease ${delay}ms`,
   });
 
@@ -313,15 +328,17 @@ export default function VCXDashboardPage() {
         .btn-active{background:rgba(124,58,237,0.3);border-color:rgba(124,58,237,0.6);color:#c4b5fd}
         .btn-green{background:rgba(16,185,129,0.15);border-color:rgba(16,185,129,0.3);color:#34d399}
         .btn-green:hover{background:rgba(16,185,129,0.25)}
+        .btn-enabled{background:rgba(16,185,129,0.15);border-color:rgba(16,185,129,0.3);color:#34d399}
         .quick-prices{display:flex;gap:6px}
         .quick-btn{flex:1;padding:6px 4px;font-size:11px;font-family:'Space Mono',monospace;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;color:rgba(255,255,255,0.4);cursor:pointer;transition:all .2s;text-align:center}
         .quick-btn:hover,.quick-btn.active{background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.4);color:#c4b5fd}
-        .metrics-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem}
+        .metrics-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:1rem;margin-bottom:1.5rem}
         .metric-card{padding:1.25rem 1.5rem;border-radius:16px;position:relative;overflow:hidden;transition:transform .2s,box-shadow .2s}
         .metric-card:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(0,0,0,0.3)}
         .metric-accent{position:absolute;top:0;left:0;width:100%;height:2px}
-        .metric-value{font-size:1.6rem;font-weight:700;font-family:'Space Mono',monospace;line-height:1;margin-bottom:4px;letter-spacing:-.02em}
+        .metric-value{font-size:1.5rem;font-weight:700;font-family:'Space Mono',monospace;line-height:1;margin-bottom:4px;letter-spacing:-.02em}
         .metric-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,0.35)}
+        .metric-sub{font-size:10px;color:rgba(255,255,255,0.2);font-family:'Space Mono',monospace;margin-top:3px}
         .main-grid{display:grid;grid-template-columns:1fr 360px;gap:1.5rem;margin-bottom:1.5rem}
         .tab-bar{display:flex;gap:4px;margin-bottom:1.25rem;background:rgba(255,255,255,0.03);padding:4px;border-radius:12px}
         .tab-btn{flex:1;padding:7px 12px;border-radius:8px;border:none;font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:500;cursor:pointer;transition:all .2s;color:rgba(255,255,255,0.4);background:transparent;letter-spacing:.03em}
@@ -364,6 +381,7 @@ export default function VCXDashboardPage() {
         .sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:1rem}
         .recharts-cartesian-axis-tick text{fill:rgba(255,255,255,0.25)!important;font-family:'Space Mono',monospace!important;font-size:10px!important}
         .recharts-tooltip-wrapper{outline:none!important}
+        @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(3,1fr)}}
       `}</style>
 
       {/* Notifications */}
@@ -385,8 +403,16 @@ export default function VCXDashboardPage() {
               <div className="logo-dot" />
               <span className="logo-text">VCX Position</span>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
               {!useManualPrice && <div className="live-badge"><div className="live-dot" />LIVE · 30s</div>}
+              <button
+                className={`ctrl-btn ${notifEnabled ? "btn-enabled" : "btn-ghost"}`}
+                style={{ width: "auto", padding: "4px 12px", fontSize: "11px", fontFamily: "'Space Mono',monospace" }}
+                onClick={requestNotifPermission}
+                title={notifEnabled ? "Browser notifications enabled" : "Enable browser notifications"}
+              >
+                {notifEnabled ? "🔔 Alerts On" : "🔔 Enable Alerts"}
+              </button>
               <span style={{ fontSize: "11px", fontFamily: "'Space Mono',monospace", color: "rgba(255,255,255,0.2)" }}>
                 {useManualPrice ? "MANUAL MODE" : `UPDATED ${formatTime(lastUpdated)}`}
               </span>
@@ -397,16 +423,10 @@ export default function VCXDashboardPage() {
           <div className="hero" style={fade(80)}>
             <div className="glass-strong hero-price-card">
               <div className="price-label">VCX · Current Price</div>
-
-              {/* Price + sparkline row */}
               <div style={{ display: "flex", alignItems: "flex-end", gap: "1.5rem", position: "relative", zIndex: 1 }}>
                 <div className={`price-huge${pricePulse ? " pulse" : ""}`}>
-                  {animatedPrice < 1000
-                    ? `$${animatedPrice.toFixed(2)}`
-                    : `$${animatedPrice.toLocaleString("en-US", { maximumFractionDigits: 2 })}`}
+                  {animatedPrice < 1000 ? `$${animatedPrice.toFixed(2)}` : `$${animatedPrice.toLocaleString("en-US", { maximumFractionDigits: 2 })}`}
                 </div>
-
-                {/* Mini sparkline */}
                 {sparkData.length > 1 && (
                   <div style={{ width: 100, height: 40, marginBottom: "0.5rem", opacity: 0.6 }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -423,7 +443,6 @@ export default function VCXDashboardPage() {
                   </div>
                 )}
               </div>
-
               <div className="price-meta">
                 <div className={`pnl-chip ${profit >= 0 ? "pnl-pos" : "pnl-neg"}`}>
                   {profit >= 0 ? "▲" : "▼"} {returnPct >= 0 ? "+" : ""}{returnPct.toFixed(2)}%
@@ -447,11 +466,7 @@ export default function VCXDashboardPage() {
               </div>
               <div className="quick-prices">
                 {[106.75, 120, 150, 200, 445].map((p) => (
-                  <button
-                    key={p}
-                    className={`quick-btn${activeQuick === p ? " active" : ""}`}
-                    onClick={() => { setManualPrice(String(p)); setActiveQuick(p); }}
-                  >
+                  <button key={p} className={`quick-btn${activeQuick === p ? " active" : ""}`} onClick={() => { setManualPrice(String(p)); setActiveQuick(p); }}>
                     ${p}
                   </button>
                 ))}
@@ -466,25 +481,27 @@ export default function VCXDashboardPage() {
             </div>
           </div>
 
-          {/* Metrics */}
+          {/* Metrics — 5 cards */}
           <div className="metrics-grid">
             {[
-              { label: "Total Value",      value: `$${animatedTotalValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`, accent: "linear-gradient(90deg,#7c3aed,#a78bfa)", color: "#e2e8f0",  delay: 160 },
-              { label: "Invested",         value: money(portfolio.invested),                                                        accent: "linear-gradient(90deg,#0ea5e9,#38bdf8)", color: "#e2e8f0",  delay: 220 },
-              { label: "Profit / Loss",    value: `${animatedProfit >= 0 ? "+" : ""}$${Math.abs(animatedProfit).toLocaleString("en-US", { maximumFractionDigits: 0 })}`, accent: profit >= 0 ? "linear-gradient(90deg,#10b981,#34d399)" : "linear-gradient(90deg,#ef4444,#f87171)", color: profit >= 0 ? "#34d399" : "#f87171", delay: 280 },
-              { label: "Unlock Countdown", value: `${daysRemaining}d`,                                                              accent: "linear-gradient(90deg,#f59e0b,#fbbf24)", color: "#fbbf24", delay: 340 },
+              { label: "Total Value",    value: `$${animatedTotalValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`, sub: null,                          accent: "linear-gradient(90deg,#7c3aed,#a78bfa)", color: "#e2e8f0",  delay: 160 },
+              { label: "Invested",       value: money(portfolio.invested),                                                        sub: null,                          accent: "linear-gradient(90deg,#0ea5e9,#38bdf8)", color: "#e2e8f0",  delay: 220 },
+              { label: "Profit / Loss",  value: `${animatedProfit >= 0 ? "+" : ""}$${Math.abs(animatedProfit).toLocaleString("en-US", { maximumFractionDigits: 0 })}`, sub: null, accent: profit >= 0 ? "linear-gradient(90deg,#10b981,#34d399)" : "linear-gradient(90deg,#ef4444,#f87171)", color: profit >= 0 ? "#34d399" : "#f87171", delay: 280 },
+              { label: "From Peak",      value: `${drawdown.toFixed(1)}%`,                                                        sub: `Peak ${money(peakValue)}`,    accent: "linear-gradient(90deg,#ef4444,#f87171)", color: "#f87171", delay: 340 },
+              { label: "Unlock",         value: `${daysRemaining}d`,                                                              sub: portfolio.unlockDate,          accent: "linear-gradient(90deg,#f59e0b,#fbbf24)", color: "#fbbf24", delay: 400 },
             ].map((m) => (
               <div key={m.label} className="glass metric-card" style={fade(m.delay)}>
                 <div className="metric-accent" style={{ background: m.accent }} />
                 <div className="metric-value" style={{ color: m.color, marginTop: ".5rem" }}>{m.value}</div>
                 <div className="metric-label">{m.label}</div>
+                {m.sub && <div className="metric-sub">{m.sub}</div>}
               </div>
             ))}
           </div>
 
           {/* Main grid */}
           <div className="main-grid">
-            <div className="glass panel" style={fade(400)}>
+            <div className="glass panel" style={fade(460)}>
               <div className="tab-bar">
                 {tabs.map((t) => (
                   <button key={t.id} className={`tab-btn${activeTab === t.id ? " active" : ""}`} onClick={() => setActiveTab(t.id)}>
@@ -493,7 +510,6 @@ export default function VCXDashboardPage() {
                 ))}
               </div>
 
-              {/* ── Chart tab ── */}
               {activeTab === "chart" && (
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
@@ -503,7 +519,6 @@ export default function VCXDashboardPage() {
                       <span style={{ color: "rgba(167,139,250,0.6)" }}>- - Projected</span>
                     </div>
                   </div>
-
                   <div style={{ width: "100%", height: 280 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={chartData} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
@@ -522,37 +537,20 @@ export default function VCXDashboardPage() {
                         <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "'Space Mono',monospace" }} tickLine={false} axisLine={false} width={48} />
                         <Tooltip content={<ChartTooltip />} />
                         <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
-                        {/* History segment */}
-                        <Area
-                          type="monotone" dataKey="pnl"
-                          stroke="#10b981" strokeWidth={2}
-                          fill="url(#histGrad)" dot={false}
-                          activeDot={{ r: 5, fill: "#10b981", strokeWidth: 0 }}
-                          data={chartData.filter((d) => !d.projected)}
-                          isAnimationActive={true} animationDuration={800}
-                        />
-                        {/* Projection segment */}
-                        <Area
-                          type="monotone" dataKey="pnl"
-                          stroke="rgba(167,139,250,0.6)" strokeWidth={1.5} strokeDasharray="5 4"
-                          fill="url(#projGrad)" dot={false}
-                          activeDot={{ r: 4, fill: "#a78bfa", strokeWidth: 0 }}
-                          data={chartData.filter((d) => d.projected)}
-                          isAnimationActive={true} animationDuration={1000}
-                        />
+                        <Area type="monotone" dataKey="pnl" stroke="#10b981" strokeWidth={2} fill="url(#histGrad)" dot={false} activeDot={{ r: 5, fill: "#10b981", strokeWidth: 0 }} data={chartData.filter((d) => !d.projected)} isAnimationActive animationDuration={800} />
+                        <Area type="monotone" dataKey="pnl" stroke="rgba(167,139,250,0.6)" strokeWidth={1.5} strokeDasharray="5 4" fill="url(#projGrad)" dot={false} activeDot={{ r: 4, fill: "#a78bfa", strokeWidth: 0 }} data={chartData.filter((d) => d.projected)} isAnimationActive animationDuration={1000} />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
-
                   <div style={{ marginTop: "1rem", display: "flex", gap: "1.5rem", fontSize: "12px", fontFamily: "'Space Mono',monospace" }}>
                     <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>CURRENT PNL</div><div style={{ color: profit >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>{money(profit)}</div></div>
                     <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>AT $445</div><div style={{ color: "#a78bfa", fontWeight: 700 }}>{money(portfolio.totalShares * 445 - portfolio.invested)}</div></div>
+                    <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>FROM PEAK</div><div style={{ color: "#f87171", fontWeight: 700 }}>{drawdown.toFixed(1)}%</div></div>
                     <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>DATAPOINTS</div><div style={{ color: "#e2e8f0" }}>{priceHistory.length} pts</div></div>
                   </div>
                 </div>
               )}
 
-              {/* ── Tax tab ── */}
               {activeTab === "tax" && (
                 <div>
                   <div className="ctrl-label">Holding Period</div>
@@ -573,7 +571,6 @@ export default function VCXDashboardPage() {
                   {isLongTerm && <div className="tax-row"><span className="tax-label">NIIT (3.8%)</span><span className="tax-val" style={{ color: "#f87171" }}>−{money(sellTax.niit)}</span></div>}
                   <div className="tax-row"><span className="tax-label">Total Tax</span><span className="tax-val" style={{ color: "#f87171", fontWeight: 700 }}>−{money(sellTax.total)}</span></div>
                   <div className="tax-net">Take-home: {money(sellTax.net)}</div>
-
                   <div className="section-title" style={{ marginTop: "1.5rem" }}>Per Exit Tier ({isLongTerm ? "Long-term" : "Short-term"})</div>
                   {taxTiers.map((tier, i) => (
                     <div key={i} className="tax-tier-card">
@@ -591,7 +588,6 @@ export default function VCXDashboardPage() {
                 </div>
               )}
 
-              {/* ── Scenario tab ── */}
               {activeTab === "scenario" && (
                 <div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.25rem" }}>
@@ -606,12 +602,7 @@ export default function VCXDashboardPage() {
                   </div>
                   <div className="scenario-header"><span>PRICE</span><span>TOTAL</span><span>UNLOCKED</span><span>LOCKED</span></div>
                   {scenarioRows.map((row) => (
-                    <div
-                      key={row.price}
-                      className={`scenario-row${Math.abs(row.price - currentPrice) < 2 ? " cur" : ""}`}
-                      onMouseEnter={() => setHoveredScenario(row.price)}
-                      onMouseLeave={() => setHoveredScenario(null)}
-                    >
+                    <div key={row.price} className={`scenario-row${Math.abs(row.price - currentPrice) < 2 ? " cur" : ""}`} onMouseEnter={() => setHoveredScenario(row.price)} onMouseLeave={() => setHoveredScenario(null)}>
                       <span style={{ color: "#a78bfa", fontWeight: 700 }}>{money(row.price)}</span>
                       <span style={{ color: "#e2e8f0" }}>{money(row.total)}</span>
                       <span style={{ color: "#34d399" }}>{money(row.unlocked)}</span>
@@ -625,7 +616,6 @@ export default function VCXDashboardPage() {
                 </div>
               )}
 
-              {/* ── Exit tab ── */}
               {activeTab === "exit" && (
                 <div>
                   {tieredPlan.map((step, i) => (
@@ -644,9 +634,7 @@ export default function VCXDashboardPage() {
                         </>
                       )}
                       {step.proceeds && (
-                        <button
-                          className="ctrl-btn btn-green"
-                          style={{ marginTop: "10px", fontSize: "12px", padding: "7px" }}
+                        <button className="ctrl-btn btn-green" style={{ marginTop: "10px", fontSize: "12px", padding: "7px" }}
                           onClick={() => {
                             const triggerNum = parseFloat(step.trigger.replace(/[^0-9.]/g, ""));
                             setSellShares(step.shares.toFixed(3));
@@ -654,9 +642,7 @@ export default function VCXDashboardPage() {
                             setActiveTab("tax");
                             pushNotif(`📊 Loaded ${step.trigger} exit into Tax Simulator`, "#10b981");
                           }}
-                        >
-                          → Simulate in Tax Calculator
-                        </button>
+                        >→ Simulate in Tax Calculator</button>
                       )}
                     </div>
                   ))}
@@ -666,12 +652,12 @@ export default function VCXDashboardPage() {
 
             {/* Right column */}
             <div className="right-col">
-              <div className="glass panel" style={fade(460)}>
+              <div className="glass panel" style={fade(520)}>
                 <div className="section-title">Position Split</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.25rem" }}>
                   {[
-                    { label: "Unlocked", sub: "Tradable now", shares: portfolio.unlockedShares, value: unlockedValue, color: "#10b981" },
-                    { label: "Locked",   sub: "Until 9/14/26", shares: portfolio.lockedShares,  value: lockedValue,   color: "#7c3aed" },
+                    { label: "Unlocked", sub: "Tradable now",  shares: portfolio.unlockedShares, value: unlockedValue, color: "#10b981" },
+                    { label: "Locked",   sub: "Until 9/14/26", shares: portfolio.lockedShares,   value: lockedValue,   color: "#7c3aed" },
                   ].map((s) => (
                     <div key={s.label} style={{ padding: "1rem", borderRadius: "12px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
                       <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: s.color, marginBottom: ".5rem", boxShadow: `0 0 8px ${s.color}` }} />
@@ -693,7 +679,7 @@ export default function VCXDashboardPage() {
                 </div>
               </div>
 
-              <div className="glass panel" style={fade(520)}>
+              <div className="glass panel" style={fade(580)}>
                 <div className="section-title">Alert Watch</div>
                 <div className="alert-status" style={{ borderColor: `${alertState.color}33`, background: `${alertState.color}11`, color: alertState.color }}>
                   <div className="alert-dot" style={{ background: alertState.color, boxShadow: `0 0 6px ${alertState.color}` }} />
@@ -719,6 +705,10 @@ export default function VCXDashboardPage() {
                   <span className="split-value" style={{ color: currentPrice <= lowAlertValue && lowAlertValue > 0 ? "#ef4444" : "rgba(255,255,255,0.5)" }}>
                     {lowAlertValue > 0 ? `${((currentPrice / lowAlertValue) * 100).toFixed(1)}%` : "—"}
                   </span>
+                </div>
+                <div className="split-row">
+                  <span className="split-label">Peak ($445)</span>
+                  <span className="split-value" style={{ color: "#f87171" }}>{drawdown.toFixed(1)}% down</span>
                 </div>
               </div>
             </div>
