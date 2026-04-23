@@ -30,6 +30,13 @@ const portfolio = {
 const PEAK_PRICE        = 445;
 const PROJECTION_PRICES = [80, 100, 120, 150, 200, 300, 445];
 
+const GOALS = [
+  { label: "Emergency Fund",  target: 5000  },
+  { label: "Car Fund",        target: 15000 },
+  { label: "Full Investment", target: 50000 },
+  { label: "Peak Value",      target: Math.round(445 * 154.548438) },
+];
+
 const RISK_ZONES = [
   { label: "DANGER",      min: 0,        max: 70,       color: "#ef4444", bg: "rgba(239,68,68,0.08)",    border: "rgba(239,68,68,0.25)"    },
   { label: "CAUTION",     min: 70,       max: 120,      color: "#f59e0b", bg: "rgba(245,158,11,0.08)",   border: "rgba(245,158,11,0.25)"   },
@@ -851,6 +858,37 @@ export default function VCXDashboardPage() {
                 <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: ".75rem" }}>
                   % move needed from {money(currentPrice)}
                 </div>
+              </div>
+
+              {/* Goal-based exit */}
+              <div className="glass panel" style={fade(550)}>
+                <div className="section-title">Goal-Based Exit</div>
+                {GOALS.map((g) => {
+                  const priceNeeded = g.target / portfolio.totalShares;
+                  const reached     = totalValue >= g.target;
+                  const pctNeeded   = ((priceNeeded - currentPrice) / currentPrice) * 100;
+                  return (
+                    <div key={g.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: ".6rem .75rem", borderRadius: "10px", marginBottom: "6px", background: reached ? "rgba(16,185,129,0.08)" : "rgba(255,255,255,0.02)", border: `1px solid ${reached ? "rgba(16,185,129,0.2)" : "rgba(255,255,255,0.05)"}`, transition: "all .3s" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "14px" }}>{reached ? "✅" : "○"}</span>
+                        <div>
+                          <div style={{ fontSize: "12px", color: reached ? "#34d399" : "rgba(255,255,255,0.6)", fontWeight: reached ? 600 : 400 }}>{g.label}</div>
+                          <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.25)", fontFamily: "'Space Mono',monospace" }}>{money(g.target)}</div>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "11px", fontFamily: "'Space Mono',monospace", color: reached ? "#34d399" : "#f59e0b", fontWeight: 700 }}>
+                          {reached ? "REACHED" : `$${priceNeeded.toFixed(2)} needed`}
+                        </div>
+                        {!reached && (
+                          <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.25)", fontFamily: "'Space Mono',monospace" }}>
+                            +{pctNeeded.toFixed(1)}% from here
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Risk zones + alerts */}
