@@ -146,6 +146,7 @@ export default function VCXDashboardPage() {
   const [activeQuick,     setActiveQuick]     = useState<number | null>(null);
   const [mounted,         setMounted]         = useState(false);
   const [notifEnabled,    setNotifEnabled]    = useState(false);
+  const [simSellShares,   setSimSellShares]   = useState<string>("20");
 
   const alertFiredHigh = useRef(false);
   const alertFiredLow  = useRef(false);
@@ -188,6 +189,32 @@ export default function VCXDashboardPage() {
     pctNeeded: ((target - currentPrice) / currentPrice) * 100,
     value:     portfolio.totalShares * target,
   }));
+
+  // ── Break-even after tax ──────────────────────────────────────────────────
+  // Price at which selling everything nets exactly portfolio.invested after tax
+  const breakEvenAfterTax = useMemo(() => {
+    // net = proceeds * (1 - taxRate), set net = invested, solve for price
+    const taxRate = (isLongTerm ? FED_LONG + NIIT : FED_SHORT) + PA_RATE;
+    const priceNeeded = portfolio.invested / (portfolio.totalShares * (1 - taxRate));
+    return priceNeeded;
+  }, [isLongTerm]);
+
+  // ── Sell pressure simulation ───────────────────────────────────────────────
+  const simSellNum      = Math.min(Math.max(Number(simSellShares) || 0, 0), portfolio.totalShares);
+  const simRemaining    = portfolio.totalShares - simSellNum;
+  const simProceeds     = simSellNum * currentPrice;
+  const simTax          = calcTax(simProceeds, isLongTerm);
+  const simNetProceeds  = simTax.net;
+  const simTargetValues = [150, 200, 300].map((t) => ({
+    target: t,
+    value:  simRemaining * t,
+    pnl:    simRemaining * t - (portfolio.invested - simNetProceeds),
+  }));
+
+  // ── Worst case ─────────────────────────────────────────────────────────────
+  const worstCasePrice = 60;
+  const worstCaseValue = portfolio.totalShares * worstCasePrice;
+  const worstCaseReturn = ((worstCaseValue / portfolio.invested) - 1) * 100;
 
   // ── Risk zone + next action ────────────────────────────────────────────────
   const riskZone   = getRiskZone(currentPrice);
@@ -752,6 +779,63 @@ export default function VCXDashboardPage() {
                 <div className="split-row"><span className="split-label">Investment to recover</span><span className="split-value" style={{ color: "#10b981" }}>{money(portfolio.invested)}</span></div>
                 <div className="split-row"><span className="split-label">Free-roll shares</span><span className="split-value">{freeRollShares.toFixed(3)}</span></div>
                 <div className="split-row"><span className="split-label">Free-roll value</span><span className="split-value" style={{ color: "#a78bfa" }}>{money(freeRollValue)}</span></div>
+                <div className="split-row">
+                  <span className="split-label">Break-even after tax ({isLongTerm ? "LT" : "ST"})</span>
+                  <span className="split-value" style={{ color: "#f59e0b" }}>{money(breakEvenAfterTax)}</span>
+                </div>
+                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: ".5rem" }}>
+                  Price needed to walk away with {money(portfolio.invested)} after all taxes
+                </div>
+              </div>
+
+              {/* Sell pressure simulation */}
+              <div className="glass panel" style={fade(500)}>
+                <div className="section-title">Sell Pressure Simulator</div>
+                <div style={{ marginBottom: "1rem" }}>
+                  <div className="ctrl-label">Shares to Sell</div>
+                  <input
+                    className="ctrl-input"
+                    value={simSellShares}
+                    onChange={(e) => setSimSellShares(e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: ".75rem", marginBottom: "1rem" }}>
+                  <div style={{ padding: ".75rem", borderRadius: "10px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                    <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace", marginBottom: "4px" }}>SELL PROCEEDS (NET)</div>
+                    <div style={{ fontSize: "1rem", fontFamily: "'Space Mono',monospace", fontWeight: 700, color: "#10b981" }}>{money(simNetProceeds)}</div>
+                  </div>
+                  <div style={{ padding: ".75rem", borderRadius: "10px", background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.2)" }}>
+                    <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace", marginBottom: "4px" }}>REMAINING SHARES</div>
+                    <div style={{ fontSize: "1rem", fontFamily: "'Space Mono',monospace", fontWeight: 700, color: "#c4b5fd" }}>{simRemaining.toFixed(3)}</div>
+                  </div>
+                </div>
+                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.25)", fontFamily: "'Space Mono',monospace", marginBottom: "6px", letterSpacing: "0.1em" }}>IF REMAINING SHARES HIT →</div>
+                {simTargetValues.map((t) => (
+                  <div key={t.target} className="recovery-row">
+                    <span style={{ color: getRiskZone(t.target).color, fontWeight: 700 }}>${t.target}</span>
+                    <span style={{ color: "#e2e8f0" }}>{money(t.value)}</span>
+                    <span style={{ color: t.pnl >= 0 ? "#34d399" : "#f87171" }}>{t.pnl >= 0 ? "+" : ""}{money(t.pnl)}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Worst case acceptance */}
+              <div className="glass panel" style={fade(560)}>
+                <div className="section-title">Worst Case Acceptance</div>
+                <div style={{ padding: "1rem", borderRadius: "12px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.15)", marginBottom: "1rem" }}>
+                  <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace", marginBottom: "4px" }}>IF VCX DROPS TO ${worstCasePrice}</div>
+                  <div style={{ fontSize: "1.4rem", fontFamily: "'Space Mono',monospace", fontWeight: 700, color: "#f87171" }}>{money(worstCaseValue)}</div>
+                  <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.4)", fontFamily: "'Space Mono',monospace", marginTop: "4px" }}>
+                    Still {worstCaseReturn >= 0 ? "+" : ""}{worstCaseReturn.toFixed(0)}% on your investment
+                  </div>
+                </div>
+                <div className="split-row"><span className="split-label">Invested</span><span className="split-value">{money(portfolio.invested)}</span></div>
+                <div className="split-row"><span className="split-label">Value at ${worstCasePrice}</span><span className="split-value" style={{ color: "#f87171" }}>{money(worstCaseValue)}</span></div>
+                <div className="split-row"><span className="split-label">Return multiple</span><span className="split-value" style={{ color: worstCaseReturn >= 0 ? "#34d399" : "#f87171" }}>{(worstCaseValue / portfolio.invested).toFixed(1)}x</span></div>
+                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: ".75rem", lineHeight: 1.5 }}>
+                  Even at ${worstCasePrice} you are still up. The floor is not zero.
+                </div>
               </div>
 
               {/* Recovery targets */}
