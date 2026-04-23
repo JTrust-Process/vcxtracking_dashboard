@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, LineChart, Line,
+  ResponsiveContainer, ReferenceLine, Line,
 } from "recharts";
 
 type PriceApiResponse = {
@@ -23,21 +23,31 @@ const portfolio = {
   lockedShares:   149.279734,
   invested:       2160.3,
   unlockDate:     "2026-09-14",
+  // Approximate entry date for time-weighted calc
+  entryDate:      "2025-10-15",
 };
 
 const PEAK_PRICE        = 445;
 const PROJECTION_PRICES = [80, 100, 120, 150, 200, 300, 445];
 
-// Risk zones
 const RISK_ZONES = [
-  { label: "DANGER",      min: 0,   max: 70,  color: "#ef4444", bg: "rgba(239,68,68,0.08)",    border: "rgba(239,68,68,0.25)"    },
-  { label: "CAUTION",     min: 70,  max: 120, color: "#f59e0b", bg: "rgba(245,158,11,0.08)",   border: "rgba(245,158,11,0.25)"   },
-  { label: "OPPORTUNITY", min: 120, max: 200, color: "#10b981", bg: "rgba(16,185,129,0.08)",   border: "rgba(16,185,129,0.25)"   },
-  { label: "TARGET",      min: 200, max: Infinity, color: "#a78bfa", bg: "rgba(124,58,237,0.08)", border: "rgba(124,58,237,0.25)" },
+  { label: "DANGER",      min: 0,        max: 70,       color: "#ef4444", bg: "rgba(239,68,68,0.08)",    border: "rgba(239,68,68,0.25)"    },
+  { label: "CAUTION",     min: 70,       max: 120,      color: "#f59e0b", bg: "rgba(245,158,11,0.08)",   border: "rgba(245,158,11,0.25)"   },
+  { label: "OPPORTUNITY", min: 120,      max: 200,      color: "#10b981", bg: "rgba(16,185,129,0.08)",   border: "rgba(16,185,129,0.25)"   },
+  { label: "TARGET",      min: 200,      max: Infinity, color: "#a78bfa", bg: "rgba(124,58,237,0.08)",   border: "rgba(124,58,237,0.25)"   },
 ];
 
 function getRiskZone(price: number) {
   return RISK_ZONES.find((z) => price >= z.min && price < z.max) ?? RISK_ZONES[0];
+}
+
+// Next best action logic
+function getNextAction(price: number): { action: string; color: string; detail: string } {
+  if (price >= 300) return { action: "SCALE OUT HARD", color: "#a78bfa", detail: "Sell 25% — $300+ target hit. Take significant profit." };
+  if (price >= 200) return { action: "SELL 25%",       color: "#10b981", detail: "Sell 25% — $200+ target hit. Take another chunk off." };
+  if (price >= 150) return { action: "SELL 20%",       color: "#10b981", detail: "Sell 20% — $150+ target hit. Lock in initial win." };
+  if (price >= 120) return { action: "WATCH CLOSELY",  color: "#f59e0b", detail: "Approaching first sell zone. Monitor for breakout above $150." };
+  return                    { action: "HOLD",           color: "#60a5fa", detail: "Below first sell trigger. Stay patient, watch for move to $150." };
 }
 
 const FED_LONG  = 0.15;
@@ -94,7 +104,7 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{
       <div style={{ color: "rgba(255,255,255,0.4)", marginBottom: "4px", fontSize: "10px" }}>{d.label}{d.projected ? " (PROJ)" : ""}</div>
       <div style={{ color: d.pnl >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>{money(d.pnl)} P&L</div>
       <div style={{ color: "#a78bfa" }}>${d.price.toFixed(2)} / share</div>
-      {d.avg && <div style={{ color: "#f59e0b", fontSize: "11px", marginTop: "2px" }}>20-avg: ${d.avg.toFixed(2)}</div>}
+      {d.avg !== undefined && <div style={{ color: "#f59e0b", fontSize: "11px", marginTop: "2px" }}>20-avg: ${d.avg.toFixed(2)}</div>}
     </div>
   );
 }
@@ -145,7 +155,7 @@ export default function VCXDashboardPage() {
   const parsedAlertHigh     = Number(alertHigh);
   const parsedAlertLow      = Number(alertLow);
 
-  const currentPrice   = useManualPrice ? (Number.isFinite(parsedManualPrice)   ? parsedManualPrice   : 0) : (Number.isFinite(livePrice) ? livePrice : 0);
+  const currentPrice   = useManualPrice ? (Number.isFinite(parsedManualPrice) ? parsedManualPrice : 0) : (Number.isFinite(livePrice) ? livePrice : 0);
   const scenarioPrice  = Number.isFinite(parsedScenarioPrice) ? parsedScenarioPrice : 0;
   const highAlertValue = Number.isFinite(parsedAlertHigh)     ? parsedAlertHigh     : 0;
   const lowAlertValue  = Number.isFinite(parsedAlertLow)      ? parsedAlertLow      : 0;
@@ -159,20 +169,35 @@ export default function VCXDashboardPage() {
   const drawdown            = ((currentPrice - PEAK_PRICE) / PEAK_PRICE) * 100;
   const peakValue           = portfolio.totalShares * PEAK_PRICE;
 
-  // ── Minimum win lock ────────────────────────────────────────────────────────
-  const breakEvenShares   = currentPrice > 0 ? portfolio.invested / currentPrice : 0;
-  const breakEvenPct      = (breakEvenShares / portfolio.totalShares) * 100;
-  const freeRollShares    = portfolio.totalShares - breakEvenShares;
-  const freeRollValue     = freeRollShares * currentPrice;
+  // ── Time-weighted return ───────────────────────────────────────────────────
+  const daysHeld = useMemo(() => {
+    const entry = new Date(portfolio.entryDate);
+    return Math.max(1, Math.ceil((Date.now() - entry.getTime()) / 86400000));
+  }, []);
+  const returnPerDay = returnPct / daysHeld;
 
-  // ── Risk zone ───────────────────────────────────────────────────────────────
-  const riskZone = getRiskZone(currentPrice);
+  // ── Minimum win lock ───────────────────────────────────────────────────────
+  const breakEvenShares = currentPrice > 0 ? portfolio.invested / currentPrice : 0;
+  const breakEvenPct    = (breakEvenShares / portfolio.totalShares) * 100;
+  const freeRollShares  = portfolio.totalShares - breakEvenShares;
+  const freeRollValue   = freeRollShares * currentPrice;
 
-  // ── Rolling average ─────────────────────────────────────────────────────────
+  // ── Recovery targets ───────────────────────────────────────────────────────
+  const recoveryTargets = [150, 200, 300, 445].map((target) => ({
+    target,
+    pctNeeded: ((target - currentPrice) / currentPrice) * 100,
+    value:     portfolio.totalShares * target,
+  }));
+
+  // ── Risk zone + next action ────────────────────────────────────────────────
+  const riskZone   = getRiskZone(currentPrice);
+  const nextAction = getNextAction(currentPrice);
+
+  // ── Rolling average ────────────────────────────────────────────────────────
   const rollingAvg = useMemo(() => {
     if (priceHistory.length < 2) return null;
-    const window = priceHistory.slice(-20);
-    return window.reduce((sum, p) => sum + p.price, 0) / window.length;
+    const w = priceHistory.slice(-20);
+    return w.reduce((s, p) => s + p.price, 0) / w.length;
   }, [priceHistory]);
 
   const priceRange = useMemo(() => {
@@ -181,21 +206,20 @@ export default function VCXDashboardPage() {
     return { high: Math.max(...prices), low: Math.min(...prices), swing: ((Math.max(...prices) - Math.min(...prices)) / Math.min(...prices)) * 100 };
   }, [priceHistory]);
 
-  // Count-up animated values
+  // Count-up
   const animatedPrice      = useCountUp(currentPrice, 600);
   const animatedTotalValue = useCountUp(totalValue,   800);
   const animatedProfit     = useCountUp(profit,       800);
 
   useEffect(() => { setMounted(true); }, []);
-
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "granted") setNotifEnabled(true);
   }, []);
 
   const requestNotifPermission = useCallback(async () => {
     if (!("Notification" in window)) return;
-    const permission = await Notification.requestPermission();
-    setNotifEnabled(permission === "granted");
+    const p = await Notification.requestPermission();
+    setNotifEnabled(p === "granted");
   }, []);
 
   const fireBrowserNotif = useCallback((title: string, body: string) => {
@@ -211,8 +235,7 @@ export default function VCXDashboardPage() {
 
   const fetchPrice = useCallback(async () => {
     try {
-      setIsLoadingPrice(true);
-      setPriceError("");
+      setIsLoadingPrice(true); setPriceError("");
       const res  = await fetch("/api/vcx-price", { method: "GET", cache: "no-store" });
       const data: PriceApiResponse = await res.json();
       if (!res.ok) { setPriceError("Market may be closed. Showing last known price."); return; }
@@ -272,22 +295,19 @@ export default function VCXDashboardPage() {
   ];
 
   const sellSharesNum = Math.min(Number(sellShares) || 0, portfolio.totalShares);
-  const sellPriceNum  = Number(sellPrice) || 0;
-  const sellProceeds  = sellSharesNum * sellPriceNum;
+  const sellProceeds  = sellSharesNum * (Number(sellPrice) || 0);
   const sellTax       = calcTax(sellProceeds, isLongTerm);
   const taxTiers      = tieredPlan.filter((t) => t.proceeds).map((t) => ({ ...t, tax: calcTax(t.proceeds!, isLongTerm) }));
 
   const chartData = useMemo(() => {
     const hist = priceHistory.length > 0
       ? priceHistory.map((p, i) => {
-          const window = priceHistory.slice(Math.max(0, i - 19), i + 1);
-          const avg = window.reduce((s, x) => s + x.price, 0) / window.length;
+          const w   = priceHistory.slice(Math.max(0, i - 19), i + 1);
+          const avg = w.reduce((s, x) => s + x.price, 0) / w.length;
           return { label: `T-${priceHistory.length - i}`, price: p.price, pnl: p.pnl, projected: false, avg };
         })
       : [{ label: "Now", price: currentPrice, pnl: profit, projected: false, avg: currentPrice }];
-    const proj = PROJECTION_PRICES.map((p) => ({
-      label: `$${p}`, price: p, pnl: portfolio.totalShares * p - portfolio.invested, projected: true, avg: undefined,
-    }));
+    const proj = PROJECTION_PRICES.map((p) => ({ label: `$${p}`, price: p, pnl: portfolio.totalShares * p - portfolio.invested, projected: true, avg: undefined }));
     return [...hist, ...proj];
   }, [priceHistory, currentPrice, profit]);
 
@@ -296,10 +316,8 @@ export default function VCXDashboardPage() {
   [priceHistory, currentPrice, profit]);
 
   const tabs: { id: typeof activeTab; label: string }[] = [
-    { id: "chart",    label: "PnL Chart" },
-    { id: "tax",      label: "Tax Sim"   },
-    { id: "scenario", label: "Scenarios" },
-    { id: "exit",     label: "Exit Plan" },
+    { id: "chart", label: "PnL Chart" }, { id: "tax", label: "Tax Sim" },
+    { id: "scenario", label: "Scenarios" }, { id: "exit", label: "Exit Plan" },
   ];
 
   function formatTime(iso: string) {
@@ -308,8 +326,7 @@ export default function VCXDashboardPage() {
   }
 
   const fade = (delay: number) => ({
-    opacity:    mounted ? 1 : 0,
-    transform:  mounted ? "translateY(0)" : "translateY(16px)",
+    opacity: mounted ? 1 : 0, transform: mounted ? "translateY(0)" : "translateY(16px)",
     transition: `opacity 0.5s ease ${delay}ms, transform 0.5s ease ${delay}ms`,
   });
 
@@ -338,6 +355,13 @@ export default function VCXDashboardPage() {
         .live-badge{display:flex;align-items:center;gap:6px;font-size:11px;font-family:'Space Mono',monospace;color:#10b981;padding:4px 12px;border-radius:100px;border:1px solid rgba(16,185,129,0.3);background:rgba(16,185,129,0.08)}
         .live-dot{width:6px;height:6px;border-radius:50%;background:#10b981;animation:blink 1.5s ease-in-out infinite}
         @keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
+        .decision-panel{display:grid;grid-template-columns:auto 1fr repeat(4,auto);gap:0;margin-bottom:1.5rem;align-items:stretch;overflow:hidden}
+        .dp-action{padding:1.25rem 2rem;display:flex;flex-direction:column;justify-content:center;border-right:1px solid rgba(255,255,255,0.06)}
+        .dp-detail{padding:1.25rem 1.5rem;display:flex;align-items:center;border-right:1px solid rgba(255,255,255,0.06)}
+        .dp-stat{padding:1.25rem 1.5rem;display:flex;flex-direction:column;justify-content:center;border-right:1px solid rgba(255,255,255,0.06);min-width:120px}
+        .dp-stat:last-child{border-right:none}
+        .dp-label{font-size:10px;font-family:'Space Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,0.25);margin-bottom:4px}
+        .dp-value{font-family:'Space Mono',monospace;font-weight:700;font-size:1rem}
         .hero{display:grid;grid-template-columns:1fr 380px;gap:1.5rem;margin-bottom:1.5rem;align-items:stretch}
         .hero-price-card{padding:2.5rem 3rem;position:relative;overflow:hidden}
         .hero-price-card::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:conic-gradient(from 0deg,transparent 0deg,rgba(124,58,237,0.03) 60deg,transparent 120deg);animation:rot 30s linear infinite}
@@ -413,12 +437,10 @@ export default function VCXDashboardPage() {
         .error-text{font-size:11px;font-family:'Space Mono',monospace;color:#f59e0b;margin-top:.5rem;padding:6px 10px;background:rgba(245,158,11,0.08);border-radius:6px;border:1px solid rgba(245,158,11,0.2)}
         .tax-tier-card{padding:1rem;border-radius:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);margin-bottom:.75rem}
         .sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:1rem}
-        .win-lock-card{padding:1.25rem;border-radius:14px;margin-bottom:1.25rem}
-        .zone-bar{display:flex;height:8px;border-radius:100px;overflow:hidden;margin:.5rem 0;gap:2px}
-        .zone-seg{height:100%;border-radius:100px;flex:1;transition:opacity .3s}
+        .recovery-row{display:flex;justify-content:space-between;align-items:center;padding:.5rem .75rem;border-radius:8px;font-size:12px;font-family:'Space Mono',monospace;margin-bottom:4px;border:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.02)}
         .recharts-cartesian-axis-tick text{fill:rgba(255,255,255,0.25)!important;font-family:'Space Mono',monospace!important;font-size:10px!important}
         .recharts-tooltip-wrapper{outline:none!important}
-        @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(3,1fr)}}
+        @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(3,1fr)}.decision-panel{grid-template-columns:1fr 1fr}}
       `}</style>
 
       <div className="notif-stack">
@@ -438,21 +460,44 @@ export default function VCXDashboardPage() {
               <span className="logo-text">VCX Position</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-              {/* Risk zone badge */}
-              <div className="risk-badge" style={{ background: riskZone.bg, border: `1px solid ${riskZone.border}`, color: riskZone.color }}>
-                {riskZone.label}
-              </div>
+              <div className="risk-badge" style={{ background: riskZone.bg, border: `1px solid ${riskZone.border}`, color: riskZone.color }}>{riskZone.label}</div>
               {!useManualPrice && <div className="live-badge"><div className="live-dot" />LIVE · 30s</div>}
-              <button
-                className={`ctrl-btn ${notifEnabled ? "btn-enabled" : "btn-ghost"}`}
-                style={{ width: "auto", padding: "4px 12px", fontSize: "11px", fontFamily: "'Space Mono',monospace" }}
-                onClick={requestNotifPermission}
-              >
+              <button className={`ctrl-btn ${notifEnabled ? "btn-enabled" : "btn-ghost"}`} style={{ width: "auto", padding: "4px 12px", fontSize: "11px", fontFamily: "'Space Mono',monospace" }} onClick={requestNotifPermission}>
                 {notifEnabled ? "🔔 Alerts On" : "🔔 Enable Alerts"}
               </button>
               <span style={{ fontSize: "11px", fontFamily: "'Space Mono',monospace", color: "rgba(255,255,255,0.2)" }}>
                 {useManualPrice ? "MANUAL MODE" : `UPDATED ${formatTime(lastUpdated)}`}
               </span>
+            </div>
+          </div>
+
+          {/* ── Decision Panel ── */}
+          <div className="glass decision-panel" style={fade(40)}>
+            {/* Next action */}
+            <div className="dp-action" style={{ background: `${nextAction.color}0d`, borderRight: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="dp-label">Next Action</div>
+              <div style={{ fontSize: "1.1rem", fontFamily: "'Space Mono',monospace", fontWeight: 700, color: nextAction.color }}>{nextAction.action}</div>
+            </div>
+            {/* Detail */}
+            <div className="dp-detail">
+              <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.4)", fontFamily: "'Space Mono',monospace" }}>{nextAction.detail}</span>
+            </div>
+            {/* Stats */}
+            <div className="dp-stat">
+              <div className="dp-label">Current Value</div>
+              <div className="dp-value" style={{ color: "#e2e8f0" }}>{money(totalValue)}</div>
+            </div>
+            <div className="dp-stat">
+              <div className="dp-label">Total Return</div>
+              <div className="dp-value" style={{ color: profit >= 0 ? "#34d399" : "#f87171" }}>{returnPct >= 0 ? "+" : ""}{returnPct.toFixed(1)}%</div>
+            </div>
+            <div className="dp-stat">
+              <div className="dp-label">Days Held</div>
+              <div className="dp-value" style={{ color: "#a78bfa" }}>{daysHeld}d</div>
+            </div>
+            <div className="dp-stat">
+              <div className="dp-label">Return / Day</div>
+              <div className="dp-value" style={{ color: "#f59e0b" }}>{returnPerDay >= 0 ? "+" : ""}{returnPerDay.toFixed(2)}%</div>
             </div>
           </div>
 
@@ -541,13 +586,10 @@ export default function VCXDashboardPage() {
             <div className="glass panel" style={fade(460)}>
               <div className="tab-bar">
                 {tabs.map((t) => (
-                  <button key={t.id} className={`tab-btn${activeTab === t.id ? " active" : ""}`} onClick={() => setActiveTab(t.id)}>
-                    {t.label}
-                  </button>
+                  <button key={t.id} className={`tab-btn${activeTab === t.id ? " active" : ""}`} onClick={() => setActiveTab(t.id)}>{t.label}</button>
                 ))}
               </div>
 
-              {/* Chart tab */}
               {activeTab === "chart" && (
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
@@ -563,12 +605,12 @@ export default function VCXDashboardPage() {
                       <AreaChart data={chartData} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
                         <defs>
                           <linearGradient id="histGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%"   stopColor="#10b981" stopOpacity={0.25} />
-                            <stop offset="100%" stopColor="#10b981" stopOpacity={0}    />
+                            <stop offset="0%" stopColor="#10b981" stopOpacity={0.25} />
+                            <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
                           </linearGradient>
                           <linearGradient id="projGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%"   stopColor="#a78bfa" stopOpacity={0.2} />
-                            <stop offset="100%" stopColor="#a78bfa" stopOpacity={0}   />
+                            <stop offset="0%" stopColor="#a78bfa" stopOpacity={0.2} />
+                            <stop offset="100%" stopColor="#a78bfa" stopOpacity={0} />
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
@@ -578,29 +620,23 @@ export default function VCXDashboardPage() {
                         <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" />
                         <Area type="monotone" dataKey="pnl" stroke="#10b981" strokeWidth={2} fill="url(#histGrad)" dot={false} activeDot={{ r: 5, fill: "#10b981", strokeWidth: 0 }} data={chartData.filter((d) => !d.projected)} isAnimationActive animationDuration={800} />
                         <Area type="monotone" dataKey="pnl" stroke="rgba(167,139,250,0.6)" strokeWidth={1.5} strokeDasharray="5 4" fill="url(#projGrad)" dot={false} activeDot={{ r: 4, fill: "#a78bfa", strokeWidth: 0 }} data={chartData.filter((d) => d.projected)} isAnimationActive animationDuration={1000} />
-                        {/* Rolling average line */}
                         <Line type="monotone" dataKey="avg" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="3 3" data={chartData.filter((d) => !d.projected && d.avg !== undefined)} isAnimationActive={false} />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
-
-                  {/* Stats row */}
                   <div style={{ marginTop: "1rem", display: "flex", gap: "1.5rem", fontSize: "12px", fontFamily: "'Space Mono',monospace", flexWrap: "wrap" }}>
                     <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>CURRENT PNL</div><div style={{ color: profit >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>{money(profit)}</div></div>
                     <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>20-PT AVG</div><div style={{ color: "#f59e0b", fontWeight: 700 }}>{rollingAvg ? `$${rollingAvg.toFixed(2)}` : "—"}</div></div>
-                    {priceRange && (
-                      <>
-                        <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>20-PT HIGH</div><div style={{ color: "#10b981" }}>${priceRange.high.toFixed(2)}</div></div>
-                        <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>20-PT LOW</div><div style={{ color: "#f87171" }}>${priceRange.low.toFixed(2)}</div></div>
-                        <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>SWING</div><div style={{ color: "rgba(255,255,255,0.6)" }}>{priceRange.swing.toFixed(1)}%</div></div>
-                      </>
-                    )}
+                    {priceRange && <>
+                      <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>SESSION HIGH</div><div style={{ color: "#10b981" }}>${priceRange.high.toFixed(2)}</div></div>
+                      <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>SESSION LOW</div><div style={{ color: "#f87171" }}>${priceRange.low.toFixed(2)}</div></div>
+                      <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>SWING</div><div style={{ color: "rgba(255,255,255,0.6)" }}>{priceRange.swing.toFixed(1)}%</div></div>
+                    </>}
                     <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>FROM PEAK</div><div style={{ color: "#f87171", fontWeight: 700 }}>{drawdown.toFixed(1)}%</div></div>
                   </div>
                 </div>
               )}
 
-              {/* Tax tab */}
               {activeTab === "tax" && (
                 <div>
                   <div className="ctrl-label">Holding Period</div>
@@ -638,7 +674,6 @@ export default function VCXDashboardPage() {
                 </div>
               )}
 
-              {/* Scenario tab */}
               {activeTab === "scenario" && (
                 <div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.25rem" }}>
@@ -665,12 +700,11 @@ export default function VCXDashboardPage() {
                     );
                   })}
                   <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: ".75rem" }}>
-                    ← Hover any row for tax estimate · price colors = risk zone
+                    ← Hover any row for tax estimate · price color = risk zone
                   </div>
                 </div>
               )}
 
-              {/* Exit tab */}
               {activeTab === "exit" && (
                 <div>
                   {tieredPlan.map((step, i) => (
@@ -710,32 +744,35 @@ export default function VCXDashboardPage() {
               {/* Minimum Win Lock */}
               <div className="glass panel" style={fade(460)}>
                 <div className="section-title">Minimum Win Lock</div>
-                <div className="win-lock-card" style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: "14px", padding: "1.25rem" }}>
+                <div style={{ padding: "1.25rem", borderRadius: "14px", background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)", marginBottom: "1.25rem" }}>
                   <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace", marginBottom: "4px" }}>SHARES TO SELL TO BREAK EVEN</div>
                   <div style={{ fontSize: "1.6rem", fontFamily: "'Space Mono',monospace", fontWeight: 700, color: "#10b981" }}>{breakEvenShares.toFixed(3)}</div>
                   <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.3)", fontFamily: "'Space Mono',monospace", marginTop: "2px" }}>{breakEvenPct.toFixed(1)}% of position at {money(currentPrice)}</div>
                 </div>
-                <div className="split-row">
-                  <span className="split-label">Invested to recover</span>
-                  <span className="split-value" style={{ color: "#10b981" }}>{money(portfolio.invested)}</span>
-                </div>
-                <div className="split-row">
-                  <span className="split-label">Free-roll shares left</span>
-                  <span className="split-value">{freeRollShares.toFixed(3)}</span>
-                </div>
-                <div className="split-row">
-                  <span className="split-label">Free-roll value</span>
-                  <span className="split-value" style={{ color: "#a78bfa" }}>{money(freeRollValue)}</span>
-                </div>
-                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: ".75rem", lineHeight: 1.5 }}>
-                  Sell {breakEvenShares.toFixed(1)} shares → recover your full investment. Everything else is pure upside.
+                <div className="split-row"><span className="split-label">Investment to recover</span><span className="split-value" style={{ color: "#10b981" }}>{money(portfolio.invested)}</span></div>
+                <div className="split-row"><span className="split-label">Free-roll shares</span><span className="split-value">{freeRollShares.toFixed(3)}</span></div>
+                <div className="split-row"><span className="split-label">Free-roll value</span><span className="split-value" style={{ color: "#a78bfa" }}>{money(freeRollValue)}</span></div>
+              </div>
+
+              {/* Recovery targets */}
+              <div className="glass panel" style={fade(520)}>
+                <div className="section-title">Recovery Targets</div>
+                {recoveryTargets.map((r) => (
+                  <div key={r.target} className="recovery-row">
+                    <span style={{ color: getRiskZone(r.target).color, fontWeight: 700 }}>${r.target}</span>
+                    <span style={{ color: "rgba(255,255,255,0.4)" }}>{r.pctNeeded > 0 ? `+${r.pctNeeded.toFixed(1)}% needed` : "✓ above current"}</span>
+                    <span style={{ color: "#e2e8f0" }}>{money(r.value)}</span>
+                  </div>
+                ))}
+                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: ".75rem" }}>
+                  % move needed from {money(currentPrice)}
                 </div>
               </div>
 
-              {/* Risk zones */}
-              <div className="glass panel" style={fade(520)}>
+              {/* Risk zones + alerts */}
+              <div className="glass panel" style={fade(580)}>
                 <div className="section-title">Risk Zones</div>
-                <div style={{ marginBottom: "1rem" }}>
+                <div style={{ marginBottom: "1.25rem" }}>
                   {RISK_ZONES.map((z) => (
                     <div key={z.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: ".5rem .75rem", borderRadius: "8px", marginBottom: "4px", background: currentPrice >= z.min && currentPrice < z.max ? z.bg : "transparent", border: `1px solid ${currentPrice >= z.min && currentPrice < z.max ? z.border : "transparent"}`, transition: "all .3s" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -748,8 +785,6 @@ export default function VCXDashboardPage() {
                     </div>
                   ))}
                 </div>
-
-                {/* Alert watch */}
                 <div className="section-title">Alert Watch</div>
                 <div className="alert-status" style={{ borderColor: `${alertState.color}33`, background: `${alertState.color}11`, color: alertState.color }}>
                   <div className="alert-dot" style={{ background: alertState.color, boxShadow: `0 0 6px ${alertState.color}` }} />
@@ -776,14 +811,11 @@ export default function VCXDashboardPage() {
                     {lowAlertValue > 0 ? `${((currentPrice / lowAlertValue) * 100).toFixed(1)}%` : "—"}
                   </span>
                 </div>
-                <div className="split-row">
-                  <span className="split-label">Peak ($445)</span>
-                  <span className="split-value" style={{ color: "#f87171" }}>{drawdown.toFixed(1)}% down</span>
-                </div>
+                <div className="split-row"><span className="split-label">Peak ($445)</span><span className="split-value" style={{ color: "#f87171" }}>{drawdown.toFixed(1)}% down</span></div>
               </div>
 
               {/* Position split */}
-              <div className="glass panel" style={fade(580)}>
+              <div className="glass panel" style={fade(640)}>
                 <div className="section-title">Position Split</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.25rem" }}>
                   {[
@@ -799,12 +831,8 @@ export default function VCXDashboardPage() {
                     </div>
                   ))}
                 </div>
-                <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.25)", marginBottom: "6px", fontFamily: "'Space Mono',monospace" }}>
-                  LOCK RELEASE — {unlockProgress.toFixed(0)}%
-                </div>
-                <div className="unlock-bar-track">
-                  <div className="unlock-bar-fill" style={{ width: `${unlockProgress}%` }} />
-                </div>
+                <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.25)", marginBottom: "6px", fontFamily: "'Space Mono',monospace" }}>LOCK RELEASE — {unlockProgress.toFixed(0)}%</div>
+                <div className="unlock-bar-track"><div className="unlock-bar-fill" style={{ width: `${unlockProgress}%` }} /></div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "rgba(255,255,255,0.2)", fontFamily: "'Space Mono',monospace", marginTop: "4px" }}>
                   <span>START</span><span>{daysRemaining}d LEFT</span><span>9/14/26</span>
                 </div>
