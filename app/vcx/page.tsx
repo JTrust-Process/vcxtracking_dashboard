@@ -10,7 +10,7 @@ type PriceApiResponse = {
   error?: string;
 };
 
-type PricePoint = { t: number; price: number; pnl: number };
+type PricePoint = { price: number; pnl: number };
 type Notification = { id: number; msg: string; color: string };
 
 const portfolio = {
@@ -29,7 +29,6 @@ const PA_RATE = 0.0307;
 const NIIT = 0.038;
 
 function calcTax(proceeds: number, isLong: boolean) {
-  const gain = proceeds - portfolio.costBasis * (proceeds / (portfolio.totalShares * (proceeds / portfolio.totalShares)));
   const fed = proceeds * (isLong ? FED_LONG : FED_SHORT);
   const pa = proceeds * PA_RATE;
   const niit = isLong ? proceeds * NIIT : 0;
@@ -50,7 +49,6 @@ export default function VCXDashboardPage() {
   const [pricePulse, setPricePulse] = useState<boolean>(false);
   const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [notifId, setNotifId] = useState(0);
   const [isLongTerm, setIsLongTerm] = useState<boolean>(true);
   const [sellShares, setSellShares] = useState<string>("30");
   const [sellPrice, setSellPrice] = useState<string>("150");
@@ -81,7 +79,6 @@ export default function VCXDashboardPage() {
 
   const pushNotif = useCallback((msg: string, color: string) => {
     const id = Date.now();
-    setNotifId(id);
     setNotifications((prev) => [...prev.slice(-4), { id, msg, color }]);
     setTimeout(() => setNotifications((prev) => prev.filter((n) => n.id !== id)), 5000);
   }, []);
@@ -97,7 +94,7 @@ export default function VCXDashboardPage() {
         setLivePrice(data.price);
         setLastUpdated(data.updatedAt || new Date().toISOString());
         setPricePulse(true);
-        setPriceHistory((prev) => [...prev.slice(-59), { t: Date.now(), price: data.price!, pnl: portfolio.totalShares * data.price! - portfolio.invested }]);
+        setPriceHistory((prev) => [...prev.slice(-59), { price: data.price!, pnl: portfolio.totalShares * data.price! - portfolio.invested }]);
         setTimeout(() => setPricePulse(false), 1000);
       }
     } catch { setPriceError("Market may be closed. Showing last known price."); }
@@ -171,8 +168,8 @@ export default function VCXDashboardPage() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const W = canvas.width = canvas.offsetWidth * window.devicePixelRatio;
-    const H = canvas.height = canvas.offsetHeight * window.devicePixelRatio;
+    canvas.width = canvas.offsetWidth * window.devicePixelRatio;
+    canvas.height = canvas.offsetHeight * window.devicePixelRatio;
     ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
     const w = canvas.offsetWidth;
     const h = canvas.offsetHeight;
@@ -229,7 +226,6 @@ export default function VCXDashboardPage() {
     ];
 
     // Draw projection fill
-    const projStart = allPoints[histPoints.length - 1];
     const projSegment = allPoints.slice(histPoints.length - 1);
     if (projSegment.length > 1) {
       ctx.beginPath();
