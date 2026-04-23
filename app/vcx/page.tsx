@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
@@ -25,7 +25,6 @@ const portfolio = {
   lockedShares: 149.279734,
   invested: 2160.3,
   unlockDate: "2026-09-14",
-  costBasis: 2160.3 / 154.548438,
 };
 
 const FED_LONG  = 0.15;
