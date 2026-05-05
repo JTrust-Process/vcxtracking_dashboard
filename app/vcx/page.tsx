@@ -498,7 +498,7 @@ export default function VCXDashboardPage() {
                 <div className={`price-huge${pricePulse ? " pulse" : ""}`}>
                   {animatedPrice < 1000 ? `$${animatedPrice.toFixed(2)}` : `$${animatedPrice.toLocaleString("en-US", { maximumFractionDigits: 2 })}`}
                 </div>
-                {sparkData.length > 1 && (
+                {mounted && sparkData.length > 1 && (
                   <div style={{ width: 90, height: 36, marginBottom: "0.4rem", opacity: 0.6 }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={sparkData} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
@@ -590,7 +590,7 @@ export default function VCXDashboardPage() {
                     <span style={{ color: "rgba(167,139,250,0.6)" }}>- - Projected</span>
                   </div>
                 </div>
-                <div style={{ width: "100%", height: 300 }}>
+                {mounted && <div style={{ width: "100%", height: 300 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={chartData} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
                       <defs>
@@ -613,7 +613,7 @@ export default function VCXDashboardPage() {
                       <Line type="monotone" dataKey="avg" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="3 3" data={chartData.filter((d) => !d.projected && d.avg !== undefined)} isAnimationActive={false} />
                     </AreaChart>
                   </ResponsiveContainer>
-                </div>
+                </div> }
                 <div style={{ marginTop: "1rem", display: "flex", gap: "1.5rem", fontSize: "12px", fontFamily: "'Space Mono',monospace", flexWrap: "wrap" }}>
                   <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>CURRENT PNL</div><div style={{ color: profit >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>{money(profit)}</div></div>
                   <div><div style={{ color: "rgba(255,255,255,0.3)", marginBottom: "2px" }}>20-PT AVG</div><div style={{ color: "#f59e0b", fontWeight: 700 }}>{rollingAvg ? `$${rollingAvg.toFixed(2)}` : "—"}</div></div>
